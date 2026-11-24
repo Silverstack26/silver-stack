@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14252b">
+  <meta name="description" content="A personal silver stacking inventory and valuation tracker.">
+  <title>Silver Stack — Tracker</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">S</div><div><strong>Silver Stack</strong><small>COLLECTOR'S LEDGER</small></div></div>
+      <nav>
+        <button class="nav-item active" data-view="overview"><span>▦</span> Overview</button>
+        <button class="nav-item" data-view="inventory"><span>◈</span> My inventory</button>
+        <button class="nav-item" data-view="activity"><span>↗</span> Purchase log</button>
+        <button class="nav-item" data-view="settings"><span>⚙</span> Settings & account</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="spot-mini"><span class="live-dot"></span><span>Silver spot</span><strong id="sideSpot">Loading…</strong><small id="spotUpdated">Checking market</small></div>
+        <div class="account-mini" id="accountMini">Guest collection <small>Stored on this device</small></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><div class="eyebrow" id="eyebrow">YOUR COLLECTION</div><h1 id="pageTitle">Overview</h1></div>
+        <div class="top-actions"><span class="market-pill"><i class="live-dot"></i> LIVE SPOT</span><button class="btn btn-primary" id="quickAdd">＋ Add silver</button></div>
+      </header>
+
+      <section id="overviewView" class="view">
+        <div class="hero-card">
+          <div class="hero-copy"><span class="hero-label">TOTAL FINE SILVER</span><div class="hero-number" id="totalOz">0.0000 <small>ozt</small></div><p>Every ounce counts. Keep your stack organized.</p></div>
+          <div class="hero-side"><span>COLLECTION VALUE AT SPOT</span><strong id="meltValue">$0.00</strong><small>Excludes dealer premiums and collectible value</small></div>
+          <div class="hero-watermark">S</div>
+        </div>
+        <div class="stats-grid">
+          <article class="stat-card"><span>ITEMS IN STACK</span><strong id="itemCount">0</strong><small>Individual inventory lines</small></article>
+          <article class="stat-card"><span>AVERAGE COST / OZT</span><strong id="avgCost">—</strong><small>Based on recorded purchase costs</small></article>
+          <article class="stat-card"><span>SPOT PRICE / OZT</span><strong id="spotPrice">$—</strong><small id="spotChange">Live market reference</small></article>
+        </div>
+        <div class="content-grid">
+          <article class="panel goal-panel">
+            <div class="panel-heading"><div><span class="eyebrow">STACKING MILESTONE</span><h2>Your silver goal</h2></div><button class="text-button" id="editGoal">Edit goal</button></div>
+            <div class="goal-line"><strong id="goalProgress">0.00 / 250 ozt</strong><span id="goalPercent">0%</span></div>
+            <div class="progress-track"><div id="goalBar" class="progress-fill"></div></div>
+            <div class="goal-foot"><span id="remainingOz">250.0000 ozt to go</span><span>Keep stacking ✦</span></div>
+          </article>
+          <article class="panel breakdown-panel">
+            <div class="panel-heading"><div><span class="eyebrow">WHERE IT'S STORED</span><h2>Stack breakdown</h2></div></div>
+            <div id="breakdown" class="breakdown-list"><div class="empty-small">Add your first silver item to see the breakdown.</div></div>
+          </article>
+        </div>
+        <article class="panel recent-panel"><div class="panel-heading"><div><span class="eyebrow">LATEST ADDITIONS</span><h2>Recently added</h2></div><button class="text-button" data-goto="inventory">View inventory →</button></div><div id="recentItems" class="recent-list"><div class="empty-small">Your latest additions will appear here.</div></div></article>
+        <p class="disclaimer">Market value is an estimate based on the latest available spot quote. Physical silver premiums, dealer buyback spreads, taxes, and collectible value may differ.</p>
+      </section>
+
+      <section id="inventoryView" class="view hidden">
+        <div class="toolbar"><div><h2>All silver holdings</h2><p>Track rounds, bars, constitutional coins, foreign silver, and collectibles.</p></div><div class="toolbar-actions"><input id="inventorySearch" class="search" placeholder="Search inventory…" aria-label="Search inventory"><select id="categoryFilter" class="select"><option value="all">All categories</option><option>Rounds</option><option>Bars</option><option>Constitutional</option><option>Foreign coins</option><option>Collectibles</option><option>Other</option></select></div></div>
+        <div class="table-wrap"><table><thead><tr><th>ITEM</th><th>CATEGORY</th><th>QUANTITY</th><th>FINE SILVER</th><th>COST</th><th>SPOT VALUE</th><th></th></tr></thead><tbody id="inventoryRows"><tr><td colspan="7" class="empty-cell">No silver recorded yet. Add your first item.</td></tr></tbody></table></div>
+      </section>
+
+      <section id="activityView" class="view hidden">
+        <div class="toolbar"><div><h2>Purchase log</h2><p>Your recorded acquisitions and cost basis.</p></div><button class="btn btn-secondary" id="exportCsv">↓ Export CSV</button></div>
+        <div id="activityList" class="activity-list"><div class="panel empty-state">No purchases recorded yet.</div></div>
+      </section>
+
+      <section id="settingsView" class="view hidden">
+        <div class="settings-grid">
+          <article class="panel"><span class="eyebrow">COLLECTION SETTINGS</span><h2>Stack preferences</h2><label class="field-label" for="goalInput">Silver goal (troy ounces)</label><input id="goalInput" class="field" type="number" min="0.001" step="0.001" value="100"><button class="btn btn-primary" id="saveGoal">Save goal</button><div class="divider"></div><h3>Data & privacy</h3><p class="muted">Guest collections stay in this browser. Create an account and connect the included Supabase backend to sync your private collection across devices.</p><button class="btn btn-secondary" id="downloadBackup">Download inventory backup</button><button class="btn btn-quiet" id="clearLocal">Clear this device's local data</button></article>
+          <article class="panel"><span class="eyebrow">ACCOUNT & CLOUD SYNC</span><h2 id="authHeading">Your account</h2><p class="muted" id="authStatus">You're using guest mode. Your collection is saved locally in this browser.</p><div id="authForm"><label class="field-label" for="authEmail">Email</label><input id="authEmail" class="field" type="email" placeholder="you@example.com"><label class="field-label" for="authPassword">Password</label><input id="authPassword" class="field" type="password" placeholder="At least 8 characters"><div class="auth-actions"><button class="btn btn-primary" id="signUp">Create account</button><button class="btn btn-secondary" id="signIn">Sign in</button></div></div><button class="btn btn-quiet hidden" id="signOut">Sign out</button></article>
+        </div>
+      </section>
+      <footer>Silver Stack Tracker <span>•</span> Built for the stackers</footer>
+    </main>
+  </div>
+
+  <dialog id="itemDialog" class="modal">
+    <form id="itemForm" method="dialog">
+      <div class="modal-head"><div><span class="eyebrow">COLLECTION ENTRY</span><h2 id="modalTitle">Add silver</h2></div><button type="button" class="close-btn" id="closeDialog">×</button></div>
+      <input type="hidden" id="itemId">
+      <div class="form-grid">
+        <div class="field-group full"><label class="field-label" for="itemPreset">Choose a common silver item</label><select class="field" id="itemPreset"><option value="">Custom / not listed — enter silver content manually</option>
+          <optgroup label="90% U.S. Constitutional Silver">
+            <option value="dime">90% Dime — Mercury, Roosevelt or Barber</option>
+            <option value="quarter">90% Quarter — Washington, Standing Liberty or Barber</option>
+            <option value="half">90% Half Dollar — Walking Liberty, Franklin or 1964 Kennedy</option>
+            <option value="morgan">Morgan Silver Dollar</option><option value="peace">Peace Silver Dollar</option>
+          </optgroup>
+          <optgroup label="Other U.S. Silver Coins"><option value="kennedy40">40% Kennedy Half Dollar (1965–1970)</option><option value="warNickel">35% Silver War Nickel (1942–1945)</option></optgroup>
+          <optgroup label="Silver Rounds"><option value="genericRound">1 oz Silver Round</option><option value="round2">2 oz Silver Round</option><option value="round5">5 oz Silver Round</option><option value="round10">10 oz Silver Round</option></optgroup>
+          <optgroup label="1 oz Silver Coins"><option value="eagle">American Silver Eagle — 1 oz</option><option value="maple">Canadian Maple Leaf — 1 oz</option><option value="britannia">British Britannia — 1 oz</option><option value="philharmonic">Austrian Philharmonic — 1 oz</option></optgroup>
+          <optgroup label="Fractional Silver Rounds"><option value="tenth">1/10 oz Silver Round</option><option value="quarterOz">1/4 oz Silver Round</option><option value="halfOz">1/2 oz Silver Round</option></optgroup>
+          <optgroup label="Silver Bars"><option value="bar1">1 oz Silver Bar</option><option value="bar5">5 oz Silver Bar</option><option value="bar10">10 oz Silver Bar</option><option value="barKilo">1 Kilo Silver Bar</option><option value="bar100">100 oz Silver Bar</option></optgroup>
+        </select></div>
+        <div class="field-group full"><label class="field-label" for="itemName">Item name</label><input class="field" id="itemName" required placeholder="e.g. Generic 1 oz silver round"></div>
+        <div class="field-group"><label class="field-label" for="itemCategory">Category</label><select class="field" id="itemCategory"><option>Rounds</option><option>Bars</option><option>Constitutional</option><option>Foreign coins</option><option>Collectibles</option><option>Other</option></select></div>
+        <div class="field-group"><label class="field-label" for="itemQty">Quantity</label><input class="field" id="itemQty" type="number" min="0.0001" step="any" value="1" required></div>
+        <div class="field-group"><label class="field-label" for="itemOz">Fine silver per item (ozt)</label><input class="field" id="itemOz" type="number" min="0" step="0.000001" placeholder="1.000000" required></div>
+        <div class="field-group"><label class="field-label" for="itemCost">Total purchase cost ($)</label><input class="field" id="itemCost" type="number" min="0" step="0.01" placeholder="Optional"></div>
+        <div class="field-group"><label class="field-label" for="itemDate">Purchase date</label><input class="field" id="itemDate" type="date"></div>
+        <div class="field-group"><label class="field-label" for="itemDealer">Dealer / source</label><input class="field" id="itemDealer" placeholder="Optional"></div>
+        <div class="field-group full"><label class="field-label" for="itemNotes">Notes</label><textarea class="field" id="itemNotes" rows="2" placeholder="Mint, year, condition, serial number…"></textarea></div>
+      </div>
+      <div class="form-hint">Choose a preset to fill in the item name, category and fine silver per item. You can still edit the silver content manually. Total fine silver updates as you change quantity or weight.</div>
+      <div class="silver-preview" aria-live="polite">Total fine silver for this entry: <strong id="itemTotalOz">1.0000 ozt</strong></div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary" id="cancelDialog">Cancel</button><button type="submit" class="btn btn-primary">Save item</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

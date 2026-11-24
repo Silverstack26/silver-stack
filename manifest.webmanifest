@@ -1,0 +1,17 @@
+{
+  "name": "Silver Stack Tracker",
+  "short_name": "Silver Stack",
+  "description": "Track your physical silver collection and its spot value.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f7f5",
+  "theme_color": "#14252b",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
