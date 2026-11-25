@@ -6,6 +6,8 @@
   let items = Array.isArray(stored)?stored:stored.items;
   let sales = Array.isArray(stored)?[]:(stored.sales||[]);
   let goal = Number(localStorage.getItem("silver-stack-goal") || 100);
+  let categoryGoals = Array.isArray(stored)?{}:(stored.categoryGoals||{});
+  const selected = new Set(), categories=["Rounds","Bars","Constitutional","Foreign coins","Collectibles","Other"];
   let spot = null, spotUpdated = null, supabase = null, session = null, currentView = "overview";
   const fmt = (n, digits=2) => Number(n || 0).toLocaleString(undefined,{minimumFractionDigits:digits,maximumFractionDigits:digits});
   const money = n => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(Number(n||0));
@@ -37,7 +39,7 @@
   const totalOz = () => items.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.oz)||0),0);
   const totalCost = () => items.reduce((s,x)=>s+(Number(x.cost)||0),0);
   const safe = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  function saveLocal(){if(session)return;localStorage.setItem(STORAGE_KEY,JSON.stringify({items,sales}));localStorage.setItem("silver-stack-goal",String(goal));}
+  function saveLocal(){if(session)return;localStorage.setItem(STORAGE_KEY,JSON.stringify({items,sales,categoryGoals}));localStorage.setItem("silver-stack-goal",String(goal));}
   function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2600);}
   function dateLabel(d){if(!d)return "Date not recorded";return new Date(d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});}
   async function loadSpot(){
@@ -103,10 +105,18 @@
     const sorted=[...items].sort((a,b)=>(b.createdAt||"").localeCompare(a.createdAt||"")).slice(0,4);
     $("recentItems").innerHTML=sorted.map(x=>`<div class="recent-row"><div><strong>${safe(x.name)}</strong><small>${safe(x.category)} · ${dateLabel(x.date)}</small></div><div class="oz">${fmt(x.qty*x.oz,4)} ozt</div><div class="value">${x.cost?money(x.cost):"—"}</div></div>`).join("")||'<div class="empty-small">Your latest additions will appear here.</div>';
   }
-  function renderInventory(){
+  function visibleItems(){
     const q=$("inventorySearch").value.toLowerCase(),cat=$("categoryFilter").value;
     const list=items.filter(x=>(cat==="all"||x.category===cat)&&(`${x.name} ${x.category} ${x.dealer||""}`).toLowerCase().includes(q));
-    $("inventoryRows").innerHTML=list.map(x=>`<tr><td><strong>${safe(x.name)}</strong><small>${safe(x.dealer||"")}</small></td><td>${safe(x.category)}</td><td>${fmt(x.qty,3)}</td><td><strong>${fmt(x.qty*x.oz,4)} ozt</strong></td><td>${x.cost?money(x.cost):"—"}</td><td>${spot===null?"—":money(x.qty*x.oz*spot)}</td><td class="row-actions"><button data-edit="${x.id}">Edit</button> · <button data-delete="${x.id}">Delete</button></td></tr>`).join("")||'<tr><td colspan="7" class="empty-cell">No matching silver found.</td></tr>';
+    const sort=$("inventorySort").value;return list.sort((a,b)=>sort==="name"?a.name.localeCompare(b.name):sort==="weight"||sort==="value"?b.qty*b.oz-a.qty*a.oz:sort==="cost"?b.cost-a.cost:sort==="date"?(b.date||"").localeCompare(a.date||""):(b.createdAt||"").localeCompare(a.createdAt||""));
+  }
+  function renderInventory(){
+    const list=visibleItems();for(const id of selected)if(!list.some(x=>x.id===id))selected.delete(id);
+    $("inventoryRows").innerHTML=list.map(x=>`<tr><td><input type="checkbox" data-select="${safe(x.id)}" aria-label="Select ${safe(x.name)}" ${selected.has(x.id)?"checked":""}></td><td><strong>${safe(x.name)}</strong><small>${safe(x.dealer||"")}</small></td><td>${safe(x.category)}</td><td>${fmt(x.qty,3)}</td><td><strong>${fmt(x.qty*x.oz,4)} ozt</strong></td><td>${x.cost?money(x.cost):"—"}</td><td>${spot===null?"—":money(x.qty*x.oz*spot)}</td><td>${x.purchaseSpot>0&&x.cost>0&&x.qty*x.oz>0?money(x.cost/(x.qty*x.oz)-x.purchaseSpot):"—"}</td><td class="row-actions"><button data-edit="${safe(x.id)}">Edit</button> · <button data-duplicate="${safe(x.id)}">Duplicate</button> · <button data-delete="${safe(x.id)}">Delete</button></td></tr>`).join("")||'<tr><td colspan="9" class="empty-cell">No matching silver found.</td></tr>';
+    $("selectionCount").textContent=selected.size+" selected";$("selectVisible").checked=!!list.length&&selected.size===list.length;$("bulkEdit").disabled=!selected.size||busy||(!!session&&!cloudReady);
+    const totals=xs=>{const w=xs.reduce((a,x)=>a+x.qty*x.oz,0),cost=xs.reduce((a,x)=>a+x.cost,0);return `${fmt(xs.reduce((a,x)=>a+x.qty,0),3)} items · ${fmt(w,4)} ozt · ${money(cost)} recorded cost · ${spot===null?"—":money(w*spot)} spot value`;};
+    $("categorySummary").innerHTML=categories.map((cat,i)=>{const xs=items.filter(x=>x.category===cat),w=xs.reduce((a,x)=>a+x.qty*x.oz,0),g=Number(categoryGoals[cat])||0;return `<div class="summary-row"><strong>${cat}</strong><p>${totals(xs)}</p><button class="text-button" data-category-goal="${i}">${g?fmt(w,2)+" / "+fmt(g,2)+" ozt — edit goal":"Set goal"}</button>${g?`<div class="progress-track"><div class="progress-fill" style="width:${Math.min(100,w/g*100)}%"></div></div>`:""}</div>`;}).join("");
+    const dealers=new Map();for(const x of items){const key=(x.dealer||"").trim()||"Not recorded";if(!dealers.has(key))dealers.set(key,[]);dealers.get(key).push(x);}$("dealerSummary").innerHTML=[...dealers].map(([name,xs])=>`<div class="summary-row"><strong>${safe(name)}</strong><p>${totals(xs)}</p></div>`).join("")||"No holdings recorded.";
   }
   function renderActivity(){
     const list=[...items].filter(x=>x.cost||x.date||x.dealer).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
@@ -134,21 +144,21 @@
     updateItemPreview();
   }
   let cloudReady=false, busy=false;
-  function openItem(item){
+  function openItem(item,duplicate=false){
     if(session&&(!cloudReady||busy)){toast("Cloud is loading or busy.");return;}
-    $("itemForm").reset();$("itemId").value=item?.id||"";
-    $("modalTitle").textContent=item?"Edit silver":"Add silver";
+    $("itemForm").reset();$("itemId").value=duplicate?"":item?.id||"";
+    $("modalTitle").textContent=duplicate?"Duplicate silver":item?"Edit silver":"Add silver";
     $("itemName").value=item?.name||"";$("itemCategory").value=item?.category||"Rounds";
     $("itemQty").value=item?.qty??1;$("itemOz").value=item?.oz??1;
     $("itemCost").value=item?.cost??"";$("itemDate").value=item?.date||new Date().toISOString().slice(0,10);
     $("itemDealer").value=item?.dealer||"";$("itemNotes").value=item?.notes||"";
-    $("itemDialog").showModal();
+    $("itemPurchaseSpot").value=duplicate?"":item?.purchaseSpot??"";if(duplicate){$("itemDate").value=new Date().toISOString().slice(0,10);$("itemCost").value="";}updateItemPreview();$("itemDialog").showModal();
   }
   $("itemForm").addEventListener("submit",async e=>{
     e.preventDefault();
     const id=$("itemId").value||crypto.randomUUID();
     const old=items.find(x=>x.id===id);
-    const item={id,name:$("itemName").value.trim(),category:$("itemCategory").value,qty:Number($("itemQty").value),oz:Number($("itemOz").value),cost:Number($("itemCost").value)||0,date:$("itemDate").value,dealer:$("itemDealer").value.trim(),notes:$("itemNotes").value.trim(),createdAt:old?.createdAt||new Date().toISOString()};
+    const item={id,name:$("itemName").value.trim(),category:$("itemCategory").value,qty:Number($("itemQty").value),oz:Number($("itemOz").value),cost:Number($("itemCost").value)||0,date:$("itemDate").value,dealer:$("itemDealer").value.trim(),notes:$("itemNotes").value.trim(),purchaseSpot:Number($("itemPurchaseSpot").value)||null,createdAt:old?.createdAt||new Date().toISOString()};
     if(!item.name||!Number.isFinite(item.qty)||item.qty<=0||!Number.isFinite(item.oz)||item.oz<0){toast("Check the item name, quantity, and silver weight.");return;}
     if(session){await changeCloud(item,old);return;}
     const idx=items.findIndex(x=>x.id===id);if(idx>=0)items[idx]=item;else items.push(item);
@@ -165,7 +175,7 @@
   document.querySelectorAll(".nav-item").forEach(b=>b.onclick=()=>switchView(b.dataset.view));
   document.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>switchView(b.dataset.goto));
   $("inventoryRows").addEventListener("click",async e=>{
-    const edit=e.target.dataset.edit,del=e.target.dataset.delete;
+    const edit=e.target.dataset.edit,del=e.target.dataset.delete,dup=e.target.dataset.duplicate;if(dup){const x=items.find(i=>i.id===dup);if(x)openItem(x,true);}
     if(edit){const x=items.find(i=>i.id===edit);if(x)openItem(x);}
     if(del&&confirm("Remove this item from your inventory?")){if(session){await changeCloud(null,items.find(i=>i.id===del));return;}items=items.filter(i=>i.id!==del);saveLocal();render();toast("Item removed");}
   });
@@ -182,7 +192,7 @@
     if(!cloudReady||busy||!session)return;
     const u=session.user.id;busy=true;renderSales();
     try{
-      const payload=item&&{id:item.id,user_id:u,name:item.name,category:item.category,quantity:item.qty,fine_oz_each:item.oz,cost_total:item.cost,purchase_date:item.date||null,dealer:item.dealer,notes:item.notes,created_at:item.createdAt};
+      const payload=item&&{id:item.id,user_id:u,name:item.name,category:item.category,quantity:item.qty,fine_oz_each:item.oz,cost_total:item.cost,purchase_date:item.date||null,dealer:item.dealer,notes:item.notes,purchase_spot:item.purchaseSpot??null,created_at:item.createdAt};
       let q;
       if(old){q=(item?supabase.from("silver_stack_items").update(payload):supabase.from("silver_stack_items").delete()).eq("id",old.id).eq("user_id",u).eq("quantity",old.qty).eq("cost_total",old.cost).eq("fine_oz_each",old.oz).select("id");}else{q=supabase.from("silver_stack_items").insert(payload).select("id");}
       const {data,error}=await q;if(error||!data?.length)throw Error(error?.message||"Inventory changed on another device.");
@@ -194,13 +204,13 @@
     const {data,error}=await supabase.from("silver_stack_items").select("*").eq("user_id",userId).order("created_at",{ascending:false});
     if(error){toast("Could not load cloud inventory: "+error.message);return;}
     if(session?.user.id!==userId)return;
-    const loadedItems=(data||[]).map(x=>({id:x.id,name:x.name,category:x.category,qty:Number(x.quantity),oz:Number(x.fine_oz_each),cost:Number(x.cost_total||0),date:x.purchase_date||"",dealer:x.dealer||"",notes:x.notes||"",createdAt:x.created_at}));
-    const {data:s}=await supabase.from("silver_stack_settings").select("goal_oz").eq("user_id",userId).maybeSingle();
+    const loadedItems=(data||[]).map(x=>({id:x.id,name:x.name,category:x.category,qty:Number(x.quantity),oz:Number(x.fine_oz_each),cost:Number(x.cost_total||0),date:x.purchase_date||"",dealer:x.dealer||"",notes:x.notes||"",purchaseSpot:x.purchase_spot===null?null:Number(x.purchase_spot)||null,createdAt:x.created_at}));
+    const {data:s}=await supabase.from("silver_stack_settings").select("goal_oz,category_goals").eq("user_id",userId).maybeSingle();
     if(session?.user.id!==userId)return;
     const {data:history,error:saleError}=await supabase.from("silver_stack_sales").select("*").eq("user_id",userId).order("created_at",{ascending:true});
     if(session?.user.id!==userId)return;
     if(saleError){toast("Cloud sales unavailable: "+saleError.message);return;}
-    items=loadedItems;goal=Number(s?.goal_oz||100);sales=(history||[]).map(x=>({id:x.id,itemId:x.item_id,name:x.name,qty:Number(x.quantity),oz:Number(x.fine_oz),basis:x.basis===null?null:Number(x.basis),proceeds:Number(x.proceeds),fees:Number(x.fees),date:x.sale_date,buyer:x.buyer||""}));cloudReady=true;
+    items=loadedItems;categoryGoals=s?.category_goals||{};goal=Number(s?.goal_oz||100);sales=(history||[]).map(x=>({id:x.id,itemId:x.item_id,name:x.name,qty:Number(x.quantity),oz:Number(x.fine_oz),basis:x.basis===null?null:Number(x.basis),proceeds:Number(x.proceeds),fees:Number(x.fees),date:x.sale_date,buyer:x.buyer||""}));cloudReady=true;
     render();toast("Your cloud collection is synced");
   }
   const recoveryReturn = new URLSearchParams(location.search).get("recovery")==="1";
@@ -272,7 +282,7 @@
   }
   function resetCollection(){
     if($("backupDialog").open)$("backupDialog").close();
-    cloudReady=false;items=[];sales=[];goal=100;
+    cloudReady=false;items=[];sales=[];goal=100;categoryGoals={};selected.clear();if($("bulkDialog").open)$("bulkDialog").close();
     if($("saleDialog").open)$("saleDialog").close();
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem("silver-stack-goal");
@@ -328,7 +338,7 @@
       if(!x||typeof x.id!=="string"||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x.id)||ids.has(x.id))throw Error("Invalid or duplicate item ID.");ids.add(x.id);
       if(typeof x.name!=="string"||!x.name.trim()||!cats.includes(x.category)||!Number.isFinite(x.qty)||x.qty<=0||!Number.isFinite(x.oz)||x.oz<0||!Number.isFinite(x.cost)||x.cost<0||!Number.isFinite(x.qty*x.oz))throw Error("Invalid inventory entry.");
       const date=x.date||"";if(date&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date))throw Error("Invalid purchase date.");
-      return {id:x.id,name:x.name,category:x.category,qty:x.qty,oz:x.oz,cost:x.cost,date,dealer:String(x.dealer||""),notes:String(x.notes||""),createdAt:typeof x.createdAt==="string"&&Number.isFinite(Date.parse(x.createdAt))?new Date(x.createdAt).toISOString():new Date().toISOString()};
+      return {id:x.id,name:x.name,category:x.category,qty:x.qty,oz:x.oz,cost:x.cost,date,dealer:String(x.dealer||""),notes:String(x.notes||""),purchaseSpot:Number.isFinite(x.purchaseSpot)&&x.purchaseSpot>0?x.purchaseSpot:null,createdAt:typeof x.createdAt==="string"&&Number.isFinite(Date.parse(x.createdAt))?new Date(x.createdAt).toISOString():new Date().toISOString()};
     });return {items:clean,goal:Number.isFinite(b.goal)&&b.goal>0?b.goal:null};
   }
   $("importBackup").onclick=()=>{if(session){toast("For safety, cloud imports are not enabled yet. Use guest mode.");return;}$("backupFile").click();};
@@ -337,7 +347,7 @@
   $("backupForm").onsubmit=e=>{e.preventDefault();if(!pendingBackup||session){$("backupDialog").close();return;}const replace=$("backupMode").value==="replace";if(sales.length){toast("Import disabled while sales history exists to avoid restoring sold holdings.");return;}if(replace&&!confirm("Replace your entire guest inventory? This cannot be undone without a backup."))return;
     const key=x=>JSON.stringify([x.name,x.category,x.qty,x.oz,x.cost,x.date,x.dealer,x.notes]);const ids=new Set(items.map(x=>x.id)),keys=new Set(items.map(key));const incoming=pendingBackup.items.filter(x=>replace||(!ids.has(x.id)&&!keys.has(key(x))));
     const next=replace?incoming:[...items,...incoming], nextGoal=$("restoreGoal").checked?pendingBackup.goal:goal;
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales}));localStorage.setItem("silver-stack-goal",String(nextGoal));}catch(err){toast("Could not save backup to this browser.");return;}
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales,categoryGoals}));localStorage.setItem("silver-stack-goal",String(nextGoal));}catch(err){toast("Could not save backup to this browser.");return;}
     items=next;goal=nextGoal;$("backupDialog").close();render();toast(`Imported ${incoming.length} entries`);
   };
 
@@ -364,12 +374,22 @@
     if(session){const u=session.user.id,x=items.find(i=>i.id===s.itemId);busy=true;renderSales();const button=$("saleForm").querySelector('button[type="submit"],button:not([type])');if(button)button.disabled=true;
       try{const {error}=await supabase.rpc("record_silver_sale",{p_id:s.id,p_item:s.itemId,p_qty:s.qty,p_proceeds:s.proceeds,p_fees:s.fees,p_date:s.date,p_buyer:s.buyer,p_expected_qty:x.qty,p_expected_cost:x.cost,p_expected_oz:x.oz});if(error)throw Error(error.message);if(session?.user.id===u)toast("Cloud sale recorded");}catch(e){toast("Sale result uncertain or rejected. Check history before retrying: "+e.message);}finally{if(session?.user.id===u){$("saleDialog").close();await loadCloud();}busy=false;if(button)button.disabled=false;renderSales();}return;}
     const next=items.map(x=>x.id===s.itemId?{...x,qty:Number(x.qty)-s.qty,cost:s.basis===null?0:Math.max(0,Math.round((Number(x.cost)-s.basis)*100)/100)}:x).filter(x=>x.qty>0), history=[...sales,s];
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales:history}));}catch(e){toast("Sale not saved. Inventory unchanged.");return;}
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales:history,categoryGoals}));}catch(e){toast("Sale not saved. Inventory unchanged.");return;}
     items=next;sales=history;$("saleDialog").close();render();toast("Sale recorded");
   };
 
   $("feedbackForm").addEventListener("submit",async e=>{e.preventDefault();const form=e.currentTarget,button=form.querySelector('button[type="submit"]'),status=$("feedbackStatus");button.disabled=true;status.textContent="Sending…";try{const response=await fetch("/",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(new FormData(form)).toString()});if(!response.ok)throw Error("Submission failed");form.reset();status.textContent="Report submitted. Thank you for your feedback!";}catch(err){status.textContent="Could not send feedback. Your message is still here; please try again later.";}finally{button.disabled=false;}});
-  if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
+
+  $("inventorySort").onchange=renderInventory;
+  $("inventoryRows").addEventListener("change",e=>{const id=e.target.dataset.select;if(id){e.target.checked?selected.add(id):selected.delete(id);renderInventory();}});
+  $("selectVisible").onchange=e=>{selected.clear();if(e.target.checked)visibleItems().forEach(x=>selected.add(x.id));renderInventory();};
+  $("bulkEdit").onclick=()=>{if(!selected.size||busy||(session&&!cloudReady))return;$("bulkForm").reset();$("bulkDialog").showModal();};
+  $("cancelBulk").onclick=()=>$("bulkDialog").close();
+  $("bulkForm").onsubmit=async e=>{e.preventDefault();if(busy||(session&&!cloudReady))return;const patch={},cat=$("bulkCategory").value;if(cat)patch.category=cat;if($("bulkDealerChange").checked)patch.dealer=$("bulkDealer").value.trim();const ids=[...selected];if(!ids.length||!Object.keys(patch).length)return;if(!confirm(`Update ${ids.length} entries?`))return;
+    if(session){const u=session.user.id;busy=true;try{const {data,error}=await supabase.from("silver_stack_items").update(patch).eq("user_id",u).in("id",ids).select("id");if(error)throw Error(error.message);if(session?.user.id===u)toast(`${data.length} entries updated`);}catch(err){toast(err.message);}finally{if(session?.user.id===u)await loadCloud();busy=false;}}else{items=items.map(x=>ids.includes(x.id)?{...x,...patch}:x);saveLocal();toast("Entries updated");}selected.clear();$("bulkDialog").close();render();};
+  $("categorySummary").onclick=async e=>{if(e.target.dataset.categoryGoal===undefined||busy||(session&&!cloudReady))return;const cat=categories[Number(e.target.dataset.categoryGoal)],raw=prompt(`Goal for ${cat} in troy ounces (0 removes goal)`,categoryGoals[cat]||"");if(raw===null)return;const n=Number(raw);if(!Number.isFinite(n)||n<0||n>1e9){toast("Enter a valid goal");return;}const next={...categoryGoals};if(n)next[cat]=n;else delete next[cat];if(session){const u=session.user.id;busy=true;try{const {error}=await supabase.from("silver_stack_settings").upsert({user_id:u,category_goals:next},{onConflict:"user_id"});if(error)throw Error(error.message);if(session?.user.id!==u)return;}catch(err){toast(err.message);return;}finally{busy=false;}}categoryGoals=next;saveLocal();render();};
+  $("printInventory").onclick=()=>{if(session&&!cloudReady)return;window.print();};
+  if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js", {updateViaCache:"none"}).then(reg=>reg.update()).catch(()=>{});
   if(config.supabaseUrl&&config.supabaseAnonKey&&!localStorage.getItem("silver-stack-cache-isolated-v2")){resetCollection();localStorage.setItem("silver-stack-cache-isolated-v2","1");}
   render();loadSpot();setInterval(loadSpot,30000);initAuth();
 })();

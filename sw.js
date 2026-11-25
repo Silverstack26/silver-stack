@@ -1,5 +1,30 @@
-const CACHE="silver-stack-v2";
-const CORE=["./","./index.html","./styles.css","./app.js","./config.js","./manifest.webmanifest","./icon.svg"];
-self.addEventListener("install",e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())));
-self.addEventListener("activate",e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
-self.addEventListener("fetch",e=>{if(e.request.method!=="GET")return;const u=new URL(e.request.url);if(u.origin!==location.origin)return;e.respondWith(caches.match(e.request).then(cached=>cached||fetch(e.request).then(r=>{const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy));return r;})));});
+const CACHE = 'silver-stack-v251';
+const CORE = ['./index.html','./styles.css?v=251','./app.js?v=251','./config.js','./manifest.webmanifest','./icon.svg'];
+self.addEventListener('install', event => event.waitUntil((async()=>{
+  const cache = await caches.open(CACHE);
+  await cache.addAll(CORE.map(url=>new Request(url,{cache:'reload'})));
+  await self.skipWaiting();
+})()));
+self.addEventListener('activate', event => event.waitUntil((async()=>{
+  for(const key of await caches.keys()) if(key.startsWith('silver-stack-') && key!==CACHE) await caches.delete(key);
+  await self.clients.claim();
+})()));
+self.addEventListener('fetch', event=>{
+  const req=event.request, url=new URL(req.url);
+  if(req.method!=='GET'||url.origin!==self.location.origin)return;
+  const nav=req.mode==='navigate';
+  if(!nav && !CORE.some(path=>new URL(path,self.registration.scope).pathname===url.pathname))return;
+  event.respondWith((async()=>{
+    const cache=await caches.open(CACHE);
+    try {
+      const response=await fetch(req,{cache:'no-store'});
+      if(response.ok && response.type==='basic' && (!nav || (!url.search && !url.hash))) {
+        try {await cache.put(nav?new URL('./index.html',self.registration.scope).href:req,response.clone());} catch (_) {}
+      }
+      return response;
+    } catch(err) {
+      if(nav && url.search) return new Response('Connect to the internet to open this link.',{status:503,headers:{'Content-Type':'text/plain'}});
+      return (await cache.match(nav?new URL('./index.html',self.registration.scope).href:req)) || Response.error();
+    }
+  })());
+});
