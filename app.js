@@ -49,11 +49,11 @@
       const d=await r.json();
       const p=Number(d.price ?? d.ask ?? d.rate);
       if(!Number.isFinite(p)||p<=0)throw new Error("Invalid spot quote");
-      spot=p;spotUpdated=d.updatedAt||d.updated_at||d.timestamp||new Date().toISOString();
+      spot=p;freshQuote=true;marketHistory=addObservation(marketHistory,{day:new Date().toISOString().slice(0,10),price:p});saveHistory(historyKey,marketHistory);spotUpdated=d.updatedAt||d.updated_at||d.timestamp||new Date().toISOString();
       render();
       $("spotUpdated").textContent="Updated "+new Date(spotUpdated).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"});
     }catch(e){
-      $("spotUpdated").textContent="Live quote unavailable";
+      freshQuote=false;$("spotUpdated").textContent="Live quote unavailable";
       $("spotPrice").textContent="Unavailable";
       $("sideSpot").textContent="Unavailable";
     }
@@ -73,7 +73,7 @@
     $("goalBar").style.width=pct+"%";
     $("remainingOz").textContent=fmt(Math.max(0,goal-oz),4)+" ozt to go";
     $("goalInput").value=goal;
-    renderBreakdown();renderRecent();renderInventory();renderActivity();renderAnalytics();renderTools();renderSales();
+    renderBreakdown();renderRecent();renderInventory();renderActivity();renderAnalytics();renderTools();renderSales();renderHistory();
   }
   function renderAnalytics(){
     const known=items.filter(x=>Number(x.cost)>0), cost=known.reduce((s,x)=>s+Number(x.cost),0), weight=known.reduce((s,x)=>s+Number(x.qty)*Number(x.oz),0), total=totalOz();
@@ -127,7 +127,7 @@
     document.querySelectorAll(".view").forEach(el=>el.classList.add("hidden"));
     $(view+"View").classList.remove("hidden");
     document.querySelectorAll(".nav-item").forEach(el=>el.classList.toggle("active",el.dataset.view===view));
-    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",sales:"Sales history",settings:"Settings & account",about:"About TrackMySilver",help:"Help & FAQ",feedback:"Feedback & bug reporting",privacy:"Privacy policy",history:"Update history"};
+    const titles={market:"Silver market",overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",sales:"Sales history",settings:"Settings & account",about:"About TrackMySilver",help:"Help & FAQ",feedback:"Feedback & bug reporting",privacy:"Privacy policy",history:"Update history"};
     $("pageTitle").textContent=titles[view];$("eyebrow").textContent=view==="overview"?"YOUR COLLECTION":view.toUpperCase().replace("INVENTORY","COLLECTION");
     render();
   }
@@ -211,7 +211,7 @@
     if(session?.user.id!==userId)return;
     if(saleError){toast("Cloud sales unavailable: "+saleError.message);return;}
     items=loadedItems;categoryGoals=s?.category_goals||{};goal=Number(s?.goal_oz||100);sales=(history||[]).map(x=>({id:x.id,itemId:x.item_id,name:x.name,qty:Number(x.quantity),oz:Number(x.fine_oz),basis:x.basis===null?null:Number(x.basis),proceeds:Number(x.proceeds),fees:Number(x.fees),date:x.sale_date,buyer:x.buyer||""}));cloudReady=true;
-    render();toast("Your cloud collection is synced");
+    render();loadHistory(userId);toast("Your cloud collection is synced");
   }
   const recoveryReturn = new URLSearchParams(location.search).get("recovery")==="1";
   let recoveryMode="email";
@@ -266,7 +266,7 @@
     finally{button.disabled=$("cancelRecovery").disabled=false;}
   });
   async function initAuth(){
-    if(!config.supabaseUrl||!config.supabaseAnonKey||!window.supabase){$("authStatus").textContent="Guest mode is ready. Cloud accounts become available after Supabase is configured in config.js.";return;}
+    if(!config.supabaseUrl||!config.supabaseAnonKey||!window.supabase){authResolved=true;$("authStatus").textContent="Guest mode is ready. Cloud accounts become available after Supabase is configured in config.js.";return;}
     supabase=window.supabase.createClient(config.supabaseUrl,config.supabaseAnonKey);
     supabase.auth.onAuthStateChange((event,s)=>{
       applySession(s);
@@ -293,9 +293,11 @@
     render();
   }
   function applySession(next){
+    authResolved=true;
     const previous=session?.user.id;
     session=next;
     if(previous!==session?.user.id){
+      portfolioHistory=[];historyOwner=null;historyMessage="";localStorage.removeItem(guestHistoryKey);
       resetCollection();
       if(session){const id=session.user.id;setTimeout(()=>{if(session?.user.id===id)loadCloud();},0);}
     }
@@ -310,7 +312,7 @@
   }
   $("signUp").onclick=async()=>{if(sales.length){toast("Guest sales exist. Account switching is disabled to protect them.");return;}if(!supabase){toast("Cloud setup needed first — see README.");return;}const email=$("authEmail").value,password=$("authPassword").value;if(password.length<8){toast("Use a password with at least 8 characters.");return;}const {error}=await supabase.auth.signUp({email,password});toast(error?error.message:"Check your email to confirm your account.");};
   $("signIn").onclick=async()=>{if(sales.length){toast("Guest sales exist. Export your backup before switching accounts; account switching clears guest data.");return;}if(!supabase){toast("Cloud setup needed first — see README.");return;}const {error}=await supabase.auth.signInWithPassword({email:$("authEmail").value,password:$("authPassword").value});if(error)toast(error.message);};
-  $("signOut").onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){toast(error.message);return;}session=null;resetCollection();updateAuthUI();switchView("settings");toast("Signed out");};
+  $("signOut").onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){toast(error.message);return;}session=null;portfolioHistory=[];historyOwner=null;historyMessage="";localStorage.removeItem(guestHistoryKey);resetCollection();updateAuthUI();switchView("settings");toast("Signed out");};
   const faceValues={dime:.1,quarter:.25,half:.5,morgan:1,peace:1,kennedy40:.5,warNickel:.05};
   for(const key of Object.keys(faceValues)){const o=document.createElement("option");o.value=key;o.textContent=SILVER_PRESETS[key].name;$("coinType").append(o);}
   function renderTools(){
@@ -389,7 +391,20 @@
     if(session){const u=session.user.id;busy=true;try{const {data,error}=await supabase.from("silver_stack_items").update(patch).eq("user_id",u).in("id",ids).select("id");if(error)throw Error(error.message);if(session?.user.id===u)toast(`${data.length} entries updated`);}catch(err){toast(err.message);}finally{if(session?.user.id===u)await loadCloud();busy=false;}}else{items=items.map(x=>ids.includes(x.id)?{...x,...patch}:x);saveLocal();toast("Entries updated");}selected.clear();$("bulkDialog").close();render();};
   $("categorySummary").onclick=async e=>{if(e.target.dataset.categoryGoal===undefined||busy||(session&&!cloudReady))return;const cat=categories[Number(e.target.dataset.categoryGoal)],raw=prompt(`Goal for ${cat} in troy ounces (0 removes goal)`,categoryGoals[cat]||"");if(raw===null)return;const n=Number(raw);if(!Number.isFinite(n)||n<0||n>1e9){toast("Enter a valid goal");return;}const next={...categoryGoals};if(n)next[cat]=n;else delete next[cat];if(session){const u=session.user.id;busy=true;try{const {error}=await supabase.from("silver_stack_settings").upsert({user_id:u,category_goals:next},{onConflict:"user_id"});if(error)throw Error(error.message);if(session?.user.id!==u)return;}catch(err){toast(err.message);return;}finally{busy=false;}}categoryGoals=next;saveLocal();render();};
   $("printInventory").onclick=()=>{if(session&&!cloudReady)return;window.print();};
+
+  const historyKey="silver-stack-market-history", guestHistoryKey="silver-stack-guest-history";
+  function readHistory(key){try{const a=JSON.parse(localStorage.getItem(key)||"[]");return Array.isArray(a)?a.filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x.day)&&Number.isFinite(x.price)&&x.price>0):[];}catch(e){return [];}}
+  let marketHistory=readHistory(historyKey), portfolioHistory=readHistory(guestHistoryKey), historyOwner=null, historyBusy=false, historyMessage="", authResolved=false, freshQuote=false;
+  function saveHistory(key,rows){try{localStorage.setItem(key,JSON.stringify(rows));return true;}catch(e){return false;}}
+  function addObservation(rows,row){return [...rows.filter(x=>x.day!==row.day),row].sort((a,b)=>a.day.localeCompare(b.day));}
+  function chartHistory(id,rows,key,format){const el=$(id);if(!rows.length){el.textContent="No observations in this period yet.";return;}const vals=rows.map(x=>x[key]),lo=Math.min(...vals),hi=Math.max(...vals),span=hi-lo||1, first=Date.parse(rows[0].day),last=Date.parse(rows.at(-1).day);const pts=rows.map((x,i)=>[last===first?300:45+510*(Date.parse(x.day)-first)/(last-first),145-110*(vals[i]-lo)/span]);el.innerHTML=`<svg class="growth-svg history-chart" viewBox="0 0 600 180" role="img" aria-label="${safe(format(vals[0]))} to ${safe(format(vals.at(-1)))}"><path d="M45 20V145H555" fill="none" stroke="currentColor" opacity=".3"/><polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#77988a" stroke-width="2"/>${pts.map((p,i)=>`<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="#77988a"><title>${rows[i].day}: ${safe(format(vals[i]))}</title></circle>`).join('')}<text x="45" y="165" font-size="11" fill="currentColor">${rows[0].day}</text><text x="555" y="165" text-anchor="end" font-size="11" fill="currentColor">${rows.at(-1).day}</text></svg>`;}
+  function historyStats(id,rows,key,format){const v=rows.map(x=>x[key]);$(id).textContent=v.length?`Latest ${format(v.at(-1))} · Low ${format(Math.min(...v))} · High ${format(Math.max(...v))} · Change ${v.length>1?format(v.at(-1)-v[0])+(v[0]>0?" ("+fmt((v.at(-1)-v[0])/v[0]*100,2)+"%)":""):"Not enough data"}`:"No recorded data";}
+  function renderHistory(){const n=Number($("historyRange").value), cutoff=new Date(Date.now()-(n-1)*86400000).toISOString().slice(0,10), filter=a=>a.filter(x=>!n||x.day>=cutoff);const m=filter(marketHistory),p=filter(portfolioHistory);$("marketStatus").textContent="Source: Gold API live quotes observed on this device. No pre-launch historical feed. Dates use UTC.";$("snapshotStatus").textContent=historyMessage||(session?"Account snapshots synchronize when signed in.":"Guest snapshots are stored on this device.");historyStats("marketStats",m,"price",money);chartHistory("marketChart",m,"price",money);historyStats("portfolioStats",p,"value",money);chartHistory("portfolioChart",p,"value",money);chartHistory("weightChart",p,"oz",v=>fmt(v,4)+" ozt");}
+  async function recordHistory(){if(!freshQuote||!spot||!authResolved||busy||historyBusy||(session&&!cloudReady))return;const day=new Date().toISOString().slice(0,10),row={day,price:spot,oz:totalOz(),value:totalOz()*spot};if(!Number.isFinite(row.value)||row.oz<0)return;const uid=session?.user.id||null;if(!uid){portfolioHistory=addObservation(portfolioHistory,row);historyMessage=saveHistory(guestHistoryKey,portfolioHistory)?"Guest snapshots saved on this device.":"Unable to save guest history.";renderHistory();return;}if(historyOwner!==uid)return;const previous=portfolioHistory.find(x=>x.day===day);if(previous&&previous.oz===row.oz&&previous.price===row.price)return;historyBusy=true;try{const {error}=await supabase.from("silver_stack_snapshots").upsert({user_id:uid,day,price:row.price,oz:row.oz},{onConflict:"user_id,day"});if(session?.user.id!==uid)return;if(error)throw error;portfolioHistory=addObservation(portfolioHistory,row);historyMessage="Account snapshot saved.";}catch(e){if(session?.user.id===uid)historyMessage="Snapshot unavailable; check database setup or connection.";}finally{historyBusy=false;renderHistory();}}
+  async function loadHistory(uid){historyOwner=null;portfolioHistory=[];historyMessage="Loading account history…";renderHistory();try{let rows=[],offset=0;while(true){const {data,error}=await supabase.from("silver_stack_snapshots").select("day,price,oz").eq("user_id",uid).order("day").range(offset,offset+499);if(session?.user.id!==uid)return;if(error)throw error;rows.push(...data);if(data.length<500)break;offset+=500;}portfolioHistory=rows.map(x=>({day:x.day,price:Number(x.price),oz:Number(x.oz),value:Number(x.price)*Number(x.oz)}));historyOwner=uid;historyMessage="Account history synchronized.";renderHistory();recordHistory();}catch(e){if(session?.user.id===uid){historyMessage="Account history unavailable; check database setup.";renderHistory();}}}
+  $("historyRange").onchange=renderHistory;
+
   if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js", {updateViaCache:"none"}).then(reg=>reg.update()).catch(()=>{});
   if(config.supabaseUrl&&config.supabaseAnonKey&&!localStorage.getItem("silver-stack-cache-isolated-v2")){resetCollection();localStorage.setItem("silver-stack-cache-isolated-v2","1");}
-  render();loadSpot();setInterval(loadSpot,30000);initAuth();
+  render();loadSpot().then(recordHistory);setInterval(()=>loadSpot().then(recordHistory),30000);initAuth();
 })();
