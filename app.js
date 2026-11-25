@@ -69,7 +69,7 @@
     $("goalBar").style.width=pct+"%";
     $("remainingOz").textContent=fmt(Math.max(0,goal-oz),4)+" ozt to go";
     $("goalInput").value=goal;
-    renderBreakdown();renderRecent();renderInventory();renderActivity();renderAnalytics();
+    renderBreakdown();renderRecent();renderInventory();renderActivity();renderAnalytics();renderTools();
   }
   function renderAnalytics(){
     const known=items.filter(x=>Number(x.cost)>0), cost=known.reduce((s,x)=>s+Number(x.cost),0), weight=known.reduce((s,x)=>s+Number(x.qty)*Number(x.oz),0), total=totalOz();
@@ -115,7 +115,7 @@
     document.querySelectorAll(".view").forEach(el=>el.classList.add("hidden"));
     $(view+"View").classList.remove("hidden");
     document.querySelectorAll(".nav-item").forEach(el=>el.classList.toggle("active",el.dataset.view===view));
-    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",settings:"Settings & account"};
+    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",settings:"Settings & account"};
     $("pageTitle").textContent=titles[view];$("eyebrow").textContent=view==="overview"?"YOUR COLLECTION":view.toUpperCase().replace("INVENTORY","COLLECTION");
     render();
   }
@@ -260,6 +260,7 @@
     }
   }
   function resetCollection(){
+    if($("backupDialog").open)$("backupDialog").close();
     items=[];goal=100;
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem("silver-stack-goal");
@@ -288,6 +289,44 @@
   $("signUp").onclick=async()=>{if(!supabase){toast("Cloud setup needed first — see README.");return;}const email=$("authEmail").value,password=$("authPassword").value;if(password.length<8){toast("Use a password with at least 8 characters.");return;}const {error}=await supabase.auth.signUp({email,password});toast(error?error.message:"Check your email to confirm your account.");};
   $("signIn").onclick=async()=>{if(!supabase){toast("Cloud setup needed first — see README.");return;}const {error}=await supabase.auth.signInWithPassword({email:$("authEmail").value,password:$("authPassword").value});if(error)toast(error.message);};
   $("signOut").onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){toast(error.message);return;}session=null;resetCollection();updateAuthUI();switchView("settings");toast("Signed out");};
+  const faceValues={dime:.1,quarter:.25,half:.5,morgan:1,peace:1,kennedy40:.5,warNickel:.05};
+  for(const key of Object.keys(faceValues)){const o=document.createElement("option");o.value=key;o.textContent=SILVER_PRESETS[key].name;$("coinType").append(o);}
+  function renderTools(){
+    const manual=$("manualSpot").checked;$("toolSpot").disabled=!manual;
+    if(!manual)$("toolSpot").value=spot===null?"":spot;
+    const s=Number($("toolSpot").value), validSpot=s>0&&Number.isFinite(s);
+    $("toolSpotNote").textContent=manual?"Manual quote (does not change portfolio values).":validSpot?"Using the latest available market quote.":"Quote unavailable; enable manual override.";
+    function results(id,w,priceId,face){
+      const raw=$(priceId).value,p=Number(raw),validPrice=raw!==""&&p>=0&&Number.isFinite(p),m=w*s;
+      if(!Number.isFinite(w)||w<=0){$(id).textContent="Enter a valid positive quantity and weight.";return;}
+      const rows=[["Fine silver",fmt(w,4)+" ozt"],...(face===undefined?[]:[["Face value",money(face)]]),["Melt value",validSpot?money(m):"—"],["Cost per ounce",validPrice?money(p/w):"—"],["Total premium",validPrice&&validSpot?money(p-m):"—"],["Premium per ounce",validPrice&&validSpot?money((p-m)/w):"—"],["Premium percentage",validPrice&&validSpot?fmt((p-m)/m*100,2)+"%":"—"]];
+      $(id).innerHTML=rows.map(([a,b])=>`<div><span>${a}</span><strong>${b}</strong></div>`).join("");
+    }
+    const q=Number($("bullQty").value),w=Number($("bullOz").value);results("bullResults",q>0&&w>0?q*w:0,"bullPrice");
+    const k=$("coinType").value,f=faceValues[k],a=Number($("coinAmount").value),n=$("coinMode").value==="face"?a/f:a;
+    results("coinResults",n>0&&Math.abs(n-Math.round(n))<1e-7?Math.round(n)*SILVER_PRESETS[k].oz:0,"coinPrice",Math.round(n)*f);
+  }
+  for(const id of ["manualSpot","toolSpot","bullQty","bullOz","bullPrice","coinType","coinMode","coinAmount","coinPrice"]) $(id).addEventListener("input",renderTools);
+  let pendingBackup=null;
+  function validateBackup(b){
+    if(!b||!Array.isArray(b.items)||b.items.length>10000)throw Error("Invalid backup format or too many entries.");
+    const ids=new Set(), cats=["Rounds","Bars","Constitutional","Foreign coins","Collectibles","Other"];
+    const clean=b.items.map(x=>{
+      if(!x||typeof x.id!=="string"||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x.id)||ids.has(x.id))throw Error("Invalid or duplicate item ID.");ids.add(x.id);
+      if(typeof x.name!=="string"||!x.name.trim()||!cats.includes(x.category)||!Number.isFinite(x.qty)||x.qty<=0||!Number.isFinite(x.oz)||x.oz<0||!Number.isFinite(x.cost)||x.cost<0||!Number.isFinite(x.qty*x.oz))throw Error("Invalid inventory entry.");
+      const date=x.date||"";if(date&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date))throw Error("Invalid purchase date.");
+      return {id:x.id,name:x.name,category:x.category,qty:x.qty,oz:x.oz,cost:x.cost,date,dealer:String(x.dealer||""),notes:String(x.notes||""),createdAt:typeof x.createdAt==="string"&&Number.isFinite(Date.parse(x.createdAt))?new Date(x.createdAt).toISOString():new Date().toISOString()};
+    });return {items:clean,goal:Number.isFinite(b.goal)&&b.goal>0?b.goal:null};
+  }
+  $("importBackup").onclick=()=>{if(session){toast("For safety, cloud imports are not enabled yet. Use guest mode.");return;}$("backupFile").click();};
+  $("backupFile").onchange=async()=>{const f=$("backupFile").files[0];$("backupFile").value="";if(!f)return;try{if(f.size>10000000)throw Error("Backup exceeds 10 MB.");const b=validateBackup(JSON.parse(await f.text()));if(session)throw Error("Sign out before importing.");pendingBackup=b;$("backupPreview").textContent=`${b.items.length} entries · ${fmt(b.items.reduce((s,x)=>s+x.qty*x.oz,0),4)} ozt. Current inventory: ${items.length} entries.`;$("backupMode").value="merge";$("restoreGoal").checked=false;$("restoreGoal").disabled=b.goal===null;$("backupDialog").showModal();}catch(e){toast(e.message);}};
+  $("cancelBackup").onclick=()=>$("backupDialog").close();$("backupDialog").addEventListener("close",()=>{pendingBackup=null;});
+  $("backupForm").onsubmit=e=>{e.preventDefault();if(!pendingBackup||session){$("backupDialog").close();return;}const replace=$("backupMode").value==="replace";if(replace&&!confirm("Replace your entire guest inventory? This cannot be undone without a backup."))return;
+    const key=x=>JSON.stringify([x.name,x.category,x.qty,x.oz,x.cost,x.date,x.dealer,x.notes]);const ids=new Set(items.map(x=>x.id)),keys=new Set(items.map(key));const incoming=pendingBackup.items.filter(x=>replace||(!ids.has(x.id)&&!keys.has(key(x))));
+    const next=replace?incoming:[...items,...incoming], nextGoal=$("restoreGoal").checked?pendingBackup.goal:goal;
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(next));localStorage.setItem("silver-stack-goal",String(nextGoal));}catch(err){toast("Could not save backup to this browser.");return;}
+    items=next;goal=nextGoal;$("backupDialog").close();render();toast(`Imported ${incoming.length} entries`);
+  };
   if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
   if(config.supabaseUrl&&config.supabaseAnonKey&&!localStorage.getItem("silver-stack-cache-isolated-v2")){resetCollection();localStorage.setItem("silver-stack-cache-isolated-v2","1");}
   render();loadSpot();setInterval(loadSpot,30000);initAuth();
