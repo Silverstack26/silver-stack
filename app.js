@@ -171,12 +171,72 @@
     items=loadedItems;goal=Number(s?.goal_oz||100);
     render();toast("Your cloud collection is synced");
   }
+  const recoveryReturn = new URLSearchParams(location.search).get("recovery")==="1";
+  let recoveryMode="email";
+  function openRecovery(passwordMode){
+    recoveryMode=passwordMode?"password":"email";
+    $("recoveryForm").reset();
+    $("recoveryEmail").value=$("authEmail").value;
+    $("recoveryEmailFields").classList.toggle("hidden",passwordMode);
+    $("recoveryPasswordFields").classList.toggle("hidden",!passwordMode);
+    $("recoveryEmail").disabled=passwordMode;
+    $("newPassword").disabled=$("confirmPassword").disabled=!passwordMode;
+    $("recoveryTitle").textContent=passwordMode?"Choose a new password":"Reset your password";
+    $("recoveryHint").textContent=passwordMode?"Use at least 8 characters and confirm your new password.":"Enter your account email to receive a secure reset link.";
+    $("submitRecovery").textContent=passwordMode?"Save new password":"Send reset email";
+    $("recoveryMessage").textContent="";
+    switchView("settings");
+    if(!$("recoveryDialog").open)$("recoveryDialog").showModal();
+  }
+  function closeRecovery(){
+    $("recoveryForm").reset();
+    $("recoveryDialog").close();
+    recoveryMode="email";
+    if(recoveryReturn)history.replaceState(null,"",location.pathname);
+  }
+  $("forgotPassword").onclick=()=>openRecovery(false);
+  $("cancelRecovery").onclick=async()=>{
+    if(recoveryMode==="password" && supabase){const {error}=await supabase.auth.signOut({scope:"local"});if(error){$("recoveryMessage").textContent=error.message;return;}}
+    closeRecovery();
+  };
+  $("recoveryDialog").addEventListener("cancel",e=>{e.preventDefault();if(!$("submitRecovery").disabled)$("cancelRecovery").click();});
+  $("recoveryForm").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const msg=$("recoveryMessage"),button=$("submitRecovery");
+    if(!supabase){msg.textContent="Cloud accounts are unavailable.";return;}
+    button.disabled=$("cancelRecovery").disabled=true;
+    try{
+      if(recoveryMode==="email"){
+        const email=$("recoveryEmail").value.trim();
+        if(!email||!$("recoveryEmail").checkValidity()){msg.textContent="Enter a valid email address.";return;}
+        const {error}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:"https://trackmysilver.com/?recovery=1"});
+        if(error){msg.textContent="Unable to send a reset email right now. Please try again later.";return;}
+        msg.textContent="If an account exists for that email, a reset link will arrive shortly. Check your spam folder too.";
+      }else{
+        const password=$("newPassword").value;
+        if(password.length<8||password!==$("confirmPassword").value){msg.textContent="Passwords must match and contain at least 8 characters.";return;}
+        if(!session){msg.textContent="Your recovery session expired. Request a new link.";return;}
+        const {error}=await supabase.auth.updateUser({password});
+        if(error){msg.textContent=error.message;return;}
+        closeRecovery();toast("Password updated successfully");
+      }
+    }catch(error){msg.textContent="Unable to complete the request. Check your connection and try again.";}
+    finally{button.disabled=$("cancelRecovery").disabled=false;}
+  });
   async function initAuth(){
     if(!config.supabaseUrl||!config.supabaseAnonKey||!window.supabase){$("authStatus").textContent="Guest mode is ready. Cloud accounts become available after Supabase is configured in config.js.";return;}
     supabase=window.supabase.createClient(config.supabaseUrl,config.supabaseAnonKey);
+    supabase.auth.onAuthStateChange((event,s)=>{
+      applySession(s);
+      if(event==="PASSWORD_RECOVERY" && s){openRecovery(true);}
+      if(event==="SIGNED_OUT" && recoveryMode==="password"){closeRecovery();}
+    });
     const {data}=await supabase.auth.getSession();
     applySession(data.session);
-    supabase.auth.onAuthStateChange((_event,s)=>{applySession(s);});
+    if(recoveryReturn && recoveryMode!=="password"){
+      openRecovery(false);
+      $("recoveryMessage").textContent="This reset link is invalid or expired. Request a new email below.";
+    }
   }
   function resetCollection(){
     items=[];goal=100;

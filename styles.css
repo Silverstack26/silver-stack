@@ -7,3 +7,5 @@
 .silver-preview{margin-top:10px;padding:12px 14px;border:1px solid #dfe8e1;background:#f5f8f5;border-radius:9px;color:#65766e;font-size:11px;display:flex;justify-content:space-between;gap:12px;align-items:center}
 .silver-preview strong{color:#263b34;font-size:14px;white-space:nowrap}
 #itemPreset{margin-bottom:2px}
+
+.recovery-link{display:block;margin:10px 0 0 auto;padding:4px 0;text-decoration:underline}.recovery-message{font-size:12px;line-height:1.5;color:var(--green);overflow-wrap:anywhere}.recovery-message:empty{display:none}.btn:disabled{opacity:.55;cursor:wait}
