@@ -59,7 +59,8 @@
     $("totalOz").innerHTML=fmt(oz,4)+' <small>ozt</small>';
     $("meltValue").textContent=value===null?"—":money(value);
     $("itemCount").textContent=items.length;
-    $("avgCost").textContent=oz>0&&cost>0?money(cost/oz):"—";
+    const knownOz=items.filter(x=>Number(x.cost)>0).reduce((s,x)=>s+Number(x.qty)*Number(x.oz),0);
+    $("avgCost").textContent=knownOz>0&&cost>0?money(cost/knownOz):"—";
     $("spotPrice").textContent=spot===null?"$—":money(spot);
     $("sideSpot").textContent=spot===null?"Loading…":money(spot)+"/ozt";
     const pct=goal>0?Math.min(100,oz/goal*100):0;
@@ -68,7 +69,27 @@
     $("goalBar").style.width=pct+"%";
     $("remainingOz").textContent=fmt(Math.max(0,goal-oz),4)+" ozt to go";
     $("goalInput").value=goal;
-    renderBreakdown();renderRecent();renderInventory();renderActivity();
+    renderBreakdown();renderRecent();renderInventory();renderActivity();renderAnalytics();
+  }
+  function renderAnalytics(){
+    const known=items.filter(x=>Number(x.cost)>0), cost=known.reduce((s,x)=>s+Number(x.cost),0), weight=known.reduce((s,x)=>s+Number(x.qty)*Number(x.oz),0), total=totalOz();
+    const gain=spot!==null&&cost>0?weight*spot-cost:null;
+    $("analyticsCost").textContent=cost>0?money(cost):"—";
+    $("analyticsGain").textContent=gain===null?"—":(gain>0?"+":"")+money(gain);
+    $("analyticsROI").textContent=gain===null?"—":(gain>0?"+":"")+fmt(gain/cost*100,2)+"%";
+    for(const id of ["analyticsGain","analyticsROI"]) $(id).className=gain===null?"":gain<0?"negative":gain>0?"positive":"";
+    $("analyticsCoverage").textContent=fmt(weight,4)+" of "+fmt(total,4)+" ozt have recorded positive purchase costs. Blank or zero costs are treated as unknown.";
+    const cats=["Rounds","Bars","Constitutional","Foreign coins","Collectibles","Other"], colors=["#35685b","#d7b66d","#789b8c","#6b829b","#a68a72","#9b9ca5"];
+    const groups=cats.map((name,i)=>({name,color:colors[i],oz:items.filter(x=>(cats.includes(x.category)?x.category:"Other")===name).reduce((s,x)=>s+Number(x.qty)*Number(x.oz),0)})).filter(x=>x.oz>0);
+    let offset=0;const stops=groups.map(x=>{const start=offset;offset+=x.oz/total*100;return `${x.color} ${start}% ${offset}%`;});
+    $("allocationChart").innerHTML=total>0?`<div class="allocation-ring" style="background:conic-gradient(${stops.join(",")})"><div><strong>${fmt(total,2)}</strong><small>ozt</small></div></div><div class="allocation-legend">${groups.map(x=>`<div><i style="background:${x.color}"></i><span>${x.name}</span><strong>${fmt(x.oz,4)} ozt · ${fmt(x.oz/total*100,1)}%</strong></div>`).join("")}</div>`:'<p class="muted">Add silver to see your allocation.</p>';
+    const dates=new Map();let undated=0;
+    for(const x of items){const w=Number(x.qty)*Number(x.oz);if(/^\d{4}-\d{2}-\d{2}$/.test(x.date||"")&&Number.isFinite(Date.parse(x.date))){dates.set(x.date,(dates.get(x.date)||0)+w);}else undated+=w;}
+    let running=0;const points=[...dates].sort((a,b)=>a[0].localeCompare(b[0])).map(([date,w])=>({date,oz:running+=w}));
+    $("growthNote").textContent="Based on dated current holdings only. "+fmt(undated,4)+" ozt without dates excluded. Edits and deletions can change this reconstructed history.";
+    if(!points.length){$("growthChart").innerHTML='<p class="muted">Add purchase dates to see stack growth.</p>';return;}
+    const max=Math.max(running,0.001), first=Date.parse(points[0].date), last=Date.parse(points.at(-1).date), px=p=>last===first?280:55+(Date.parse(p.date)-first)/(last-first)*475, py=p=>190-p.oz/max*155;
+    $("growthChart").innerHTML=`<svg class="growth-svg" viewBox="0 0 560 235" role="img" aria-label="Cumulative dated current silver holdings"><g fill="none" stroke="#dfe6e1">${[0,.25,.5,.75,1].map(v=>`<path d="M55 ${190-v*155}H530"/>`).join("")}</g><g fill="currentColor" font-size="11">${[0,.25,.5,.75,1].map(v=>`<text x="48" y="${194-v*155}" text-anchor="end">${fmt(max*v,1)}</text>`).join("")}<text x="55" y="216">${safe(points[0].date)}</text>${last!==first?`<text x="530" y="216" text-anchor="end">${safe(points.at(-1).date)}</text>`:""}</g><polyline fill="none" stroke="#35685b" stroke-width="3" points="${points.map(p=>px(p)+","+py(p)).join(" ")}"/>${points.map(p=>`<circle cx="${px(p)}" cy="${py(p)}" r="4" fill="#35685b"><title>${safe(p.date)}: ${fmt(p.oz,4)} ozt</title></circle>`).join("")}</svg>`;
   }
   function renderBreakdown(){
     const cats=["Rounds","Bars","Constitutional","Foreign coins","Collectibles","Other"];
@@ -94,7 +115,7 @@
     document.querySelectorAll(".view").forEach(el=>el.classList.add("hidden"));
     $(view+"View").classList.remove("hidden");
     document.querySelectorAll(".nav-item").forEach(el=>el.classList.toggle("active",el.dataset.view===view));
-    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",settings:"Settings & account"};
+    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",settings:"Settings & account"};
     $("pageTitle").textContent=titles[view];$("eyebrow").textContent=view==="overview"?"YOUR COLLECTION":view.toUpperCase().replace("INVENTORY","COLLECTION");
     render();
   }

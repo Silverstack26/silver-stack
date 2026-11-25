@@ -8,7 +8,7 @@
   <title>Silver Stack — Tracker</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=4">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -19,6 +19,7 @@
         <button class="nav-item active" data-view="overview"><span>▦</span> Overview</button>
         <button class="nav-item" data-view="inventory"><span>◈</span> My inventory</button>
         <button class="nav-item" data-view="activity"><span>↗</span> Purchase log</button>
+        <button class="nav-item" data-view="analytics"><span>▥</span> Portfolio analytics</button>
         <button class="nav-item" data-view="settings"><span>⚙</span> Settings & account</button>
       </nav>
       <div class="sidebar-bottom">
@@ -70,6 +71,20 @@
         <div id="activityList" class="activity-list"><div class="panel empty-state">No purchases recorded yet.</div></div>
       </section>
 
+      <section id="analyticsView" class="view hidden">
+        <div class="toolbar"><div><h2>Portfolio performance</h2><p>Track your investment and silver allocation.</p></div></div>
+        <div class="stats-grid analytics-stats">
+          <article class="stat-card"><span>RECORDED PURCHASE COST</span><strong id="analyticsCost">—</strong><small>Holdings with recorded positive costs</small></article>
+          <article class="stat-card"><span>UNREALIZED PROFIT / LOSS</span><strong id="analyticsGain">—</strong><small>Spot value less recorded cost</small></article>
+          <article class="stat-card"><span>RETURN ON INVESTMENT</span><strong id="analyticsROI">—</strong><small>Based on known costs only</small></article>
+        </div>
+        <p class="muted" id="analyticsCoverage"></p>
+        <div class="content-grid analytics-grid">
+          <article class="panel"><div class="panel-heading"><div><span class="eyebrow">ACQUISITION HISTORY</span><h2>Stack growth</h2></div></div><div id="growthChart"></div><p class="muted" id="growthNote"></p></article>
+          <article class="panel"><div class="panel-heading"><div><span class="eyebrow">FINE SILVER BY CATEGORY</span><h2>Collection allocation</h2></div></div><div id="allocationChart"></div></article>
+        </div>
+        <p class="disclaimer">Returns are estimates at spot, not dealer offers or collectible values. Growth is reconstructed from purchase dates of current holdings, not historical account snapshots.</p>
+      </section>
       <section id="settingsView" class="view hidden">
         <div class="settings-grid">
           <article class="panel"><span class="eyebrow">COLLECTION SETTINGS</span><h2>Stack preferences</h2><label class="field-label" for="goalInput">Silver goal (troy ounces)</label><input id="goalInput" class="field" type="number" min="0.001" step="0.001" value="100"><button class="btn btn-primary" id="saveGoal">Save goal</button><div class="divider"></div><h3>Data & privacy</h3><p class="muted">Guest collections stay in this browser. Create an account and connect the included Supabase backend to sync your private collection across devices.</p><button class="btn btn-secondary" id="downloadBackup">Download inventory backup</button><button class="btn btn-quiet" id="clearLocal">Clear this device's local data</button></article>
@@ -124,6 +139,6 @@
   </dialog>
   <div id="toast" class="toast" role="status"></div>
   <script src="config.js"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
