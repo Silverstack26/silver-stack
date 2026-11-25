@@ -15,3 +15,20 @@
 .tool-results{display:grid;gap:10px;margin-top:20px}.tool-results>div{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:10px}.tool-results strong{color:var(--green);text-align:right}#manualSpot,#restoreGoal{accent-color:var(--green)}#toolSpotNote{margin-top:8px}
 
 #salesList{margin-top:16px}#salesSummary{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:700px){#salesSummary{grid-template-columns:1fr}}
+
+/* v2.3 appearance */
+.theme-toggle{background:var(--soft);color:var(--ink);font-size:18px;line-height:1;padding:9px 12px;min-width:36px}.theme-toggle:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+:root[data-theme="dark"]{--ink:#e6efeb;--muted:#a8bbb5;--line:#35474b;--paper:#101b20;--white:#1d2c32;--green:#a5d3b8;--green2:#83b9a2;--soft:#293e43;--shadow:0 12px 35px #0003}
+[data-theme="dark"] :is(.panel,.stat-card,.table-wrap,.activity-card,.modal,.allocation-ring>div){background:var(--white);border-color:var(--line);color:var(--ink)}
+[data-theme="dark"] :is(.field,.search,.select,.preset-row button){background:#17262c;color:var(--ink);border-color:var(--line)}
+[data-theme="dark"] :is(th,.form-hint,.silver-preview,code,.close-btn,.btn-secondary){background:var(--soft);color:var(--ink);border-color:var(--line)}
+[data-theme="dark"] :is(td,.recent-row,.divider){border-color:var(--line)}
+[data-theme="dark"] .divider{background:var(--line)}
+[data-theme="dark"] :is(td,td strong,.silver-preview strong,.recent-row .value,.field-label,.growth-svg,.tool-results strong,.text-button,.row-actions button,.goal-line span,.market-pill){color:#b5d8c6}
+[data-theme="dark"] :is(.muted,.toolbar p,.stat-card span,.stat-card small,.eyebrow,.goal-foot,.recent-row small,td small,.activity-card small,.empty-small,.empty-cell,.disclaimer,footer){color:var(--muted)}
+[data-theme="dark"] :is(.progress-track,.breakdown-row .bar){background:var(--soft)}
+[data-theme="dark"] .btn-primary{background:#35685b;color:#fff}
+[data-theme="dark"] :is(.negative,.btn-quiet){color:#f2a69d}[data-theme="dark"] .positive{color:#8ed6a9}
+[data-theme="dark"] .growth-svg g[stroke]{stroke:var(--line)}[data-theme="dark"] .growth-svg polyline{stroke:#83b9a2}[data-theme="dark"] .growth-svg circle{fill:#83b9a2}
+[data-theme="dark"] .hero-card .eyebrow{color:#b6c8bd}
+@media(max-width:700px){.theme-toggle{padding:8px;min-width:32px}.topbar h1{overflow-wrap:anywhere}.topbar>div:first-child{min-width:0}.top-actions{flex-shrink:0}}
