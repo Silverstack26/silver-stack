@@ -2,7 +2,9 @@
   const $ = (id) => document.getElementById(id);
   const STORAGE_KEY = "silver-stack-v1";
   const config = window.SILVER_APP_CONFIG || {};
-  let items = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  let items = Array.isArray(stored)?stored:stored.items;
+  let sales = Array.isArray(stored)?[]:(stored.sales||[]);
   let goal = Number(localStorage.getItem("silver-stack-goal") || 100);
   let spot = null, spotUpdated = null, supabase = null, session = null, currentView = "overview";
   const fmt = (n, digits=2) => Number(n || 0).toLocaleString(undefined,{minimumFractionDigits:digits,maximumFractionDigits:digits});
@@ -35,7 +37,7 @@
   const totalOz = () => items.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.oz)||0),0);
   const totalCost = () => items.reduce((s,x)=>s+(Number(x.cost)||0),0);
   const safe = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  function saveLocal(){if(session)return;localStorage.setItem(STORAGE_KEY,JSON.stringify(items));localStorage.setItem("silver-stack-goal",String(goal));}
+  function saveLocal(){if(session)return;localStorage.setItem(STORAGE_KEY,JSON.stringify({items,sales}));localStorage.setItem("silver-stack-goal",String(goal));}
   function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2600);}
   function dateLabel(d){if(!d)return "Date not recorded";return new Date(d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});}
   async function loadSpot(){
@@ -69,7 +71,7 @@
     $("goalBar").style.width=pct+"%";
     $("remainingOz").textContent=fmt(Math.max(0,goal-oz),4)+" ozt to go";
     $("goalInput").value=goal;
-    renderBreakdown();renderRecent();renderInventory();renderActivity();renderAnalytics();renderTools();
+    renderBreakdown();renderRecent();renderInventory();renderActivity();renderAnalytics();renderTools();renderSales();
   }
   function renderAnalytics(){
     const known=items.filter(x=>Number(x.cost)>0), cost=known.reduce((s,x)=>s+Number(x.cost),0), weight=known.reduce((s,x)=>s+Number(x.qty)*Number(x.oz),0), total=totalOz();
@@ -115,7 +117,7 @@
     document.querySelectorAll(".view").forEach(el=>el.classList.add("hidden"));
     $(view+"View").classList.remove("hidden");
     document.querySelectorAll(".nav-item").forEach(el=>el.classList.toggle("active",el.dataset.view===view));
-    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",settings:"Settings & account"};
+    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",sales:"Sales history",settings:"Settings & account"};
     $("pageTitle").textContent=titles[view];$("eyebrow").textContent=view==="overview"?"YOUR COLLECTION":view.toUpperCase().replace("INVENTORY","COLLECTION");
     render();
   }
@@ -169,8 +171,8 @@
     const csv=rows.map(r=>r.map(v=>'"'+String(v??"").replace(/"/g,'""')+'"').join(",")).join("\n");
     downloadFile("silver-stack-inventory.csv",csv,"text/csv");toast("CSV exported");
   };
-  $("downloadBackup").onclick=()=>downloadFile("silver-stack-backup.json",JSON.stringify({items,goal,exportedAt:new Date().toISOString()},null,2),"application/json");
-  $("clearLocal").onclick=()=>{if(confirm("This clears the inventory saved in this browser. It does not delete any cloud account data. Continue?")){items=[];saveLocal();render();toast("Local inventory cleared");}};
+  $("downloadBackup").onclick=()=>downloadFile("silver-stack-backup.json",JSON.stringify({items,sales,goal,exportedAt:new Date().toISOString()},null,2),"application/json");
+  $("clearLocal").onclick=()=>{if(confirm("This clears the inventory saved in this browser. It does not delete any cloud account data. Continue?")){if(session){toast("Sign out first.");return;}items=[];sales=[];saveLocal();render();toast("Local inventory cleared");}};
   function downloadFile(name,data,type){const a=document.createElement("a"),url=URL.createObjectURL(new Blob([data],{type}));a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
   function syncSettings(){if(!supabase||!session)return;supabase.from("silver_stack_settings").upsert({user_id:session.user.id,goal_oz:goal},{onConflict:"user_id"}).then(({error})=>{if(error)console.error(error);});}
   async function syncCloud(){
@@ -261,7 +263,8 @@
   }
   function resetCollection(){
     if($("backupDialog").open)$("backupDialog").close();
-    items=[];goal=100;
+    items=[];sales=[];goal=100;
+    if($("saleDialog").open)$("saleDialog").close();
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem("silver-stack-goal");
     $("authEmail").value="";$("authPassword").value="";
@@ -286,8 +289,8 @@
     $("authForm").classList.toggle("hidden",logged);$("signOut").classList.toggle("hidden",!logged);
     $("accountMini").innerHTML=logged?`<span>${safe(session.user.email)}</span><small>Cloud sync enabled</small>`:"Guest collection <small>Stored on this device</small>";
   }
-  $("signUp").onclick=async()=>{if(!supabase){toast("Cloud setup needed first — see README.");return;}const email=$("authEmail").value,password=$("authPassword").value;if(password.length<8){toast("Use a password with at least 8 characters.");return;}const {error}=await supabase.auth.signUp({email,password});toast(error?error.message:"Check your email to confirm your account.");};
-  $("signIn").onclick=async()=>{if(!supabase){toast("Cloud setup needed first — see README.");return;}const {error}=await supabase.auth.signInWithPassword({email:$("authEmail").value,password:$("authPassword").value});if(error)toast(error.message);};
+  $("signUp").onclick=async()=>{if(sales.length){toast("Guest sales exist. Account switching is disabled to protect them.");return;}if(!supabase){toast("Cloud setup needed first — see README.");return;}const email=$("authEmail").value,password=$("authPassword").value;if(password.length<8){toast("Use a password with at least 8 characters.");return;}const {error}=await supabase.auth.signUp({email,password});toast(error?error.message:"Check your email to confirm your account.");};
+  $("signIn").onclick=async()=>{if(sales.length){toast("Guest sales exist. Export your backup before switching accounts; account switching clears guest data.");return;}if(!supabase){toast("Cloud setup needed first — see README.");return;}const {error}=await supabase.auth.signInWithPassword({email:$("authEmail").value,password:$("authPassword").value});if(error)toast(error.message);};
   $("signOut").onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){toast(error.message);return;}session=null;resetCollection();updateAuthUI();switchView("settings");toast("Signed out");};
   const faceValues={dime:.1,quarter:.25,half:.5,morgan:1,peace:1,kennedy40:.5,warNickel:.05};
   for(const key of Object.keys(faceValues)){const o=document.createElement("option");o.value=key;o.textContent=SILVER_PRESETS[key].name;$("coinType").append(o);}
@@ -309,6 +312,7 @@
   for(const id of ["manualSpot","toolSpot","bullQty","bullOz","bullPrice","coinType","coinMode","coinAmount","coinPrice"]) $(id).addEventListener("input",renderTools);
   let pendingBackup=null;
   function validateBackup(b){
+    if(b?.sales?.length)throw Error("Backups containing sales cannot yet be imported. Keep this file for your records.");
     if(!b||!Array.isArray(b.items)||b.items.length>10000)throw Error("Invalid backup format or too many entries.");
     const ids=new Set(), cats=["Rounds","Bars","Constitutional","Foreign coins","Collectibles","Other"];
     const clean=b.items.map(x=>{
@@ -321,12 +325,38 @@
   $("importBackup").onclick=()=>{if(session){toast("For safety, cloud imports are not enabled yet. Use guest mode.");return;}$("backupFile").click();};
   $("backupFile").onchange=async()=>{const f=$("backupFile").files[0];$("backupFile").value="";if(!f)return;try{if(f.size>10000000)throw Error("Backup exceeds 10 MB.");const b=validateBackup(JSON.parse(await f.text()));if(session)throw Error("Sign out before importing.");pendingBackup=b;$("backupPreview").textContent=`${b.items.length} entries · ${fmt(b.items.reduce((s,x)=>s+x.qty*x.oz,0),4)} ozt. Current inventory: ${items.length} entries.`;$("backupMode").value="merge";$("restoreGoal").checked=false;$("restoreGoal").disabled=b.goal===null;$("backupDialog").showModal();}catch(e){toast(e.message);}};
   $("cancelBackup").onclick=()=>$("backupDialog").close();$("backupDialog").addEventListener("close",()=>{pendingBackup=null;});
-  $("backupForm").onsubmit=e=>{e.preventDefault();if(!pendingBackup||session){$("backupDialog").close();return;}const replace=$("backupMode").value==="replace";if(replace&&!confirm("Replace your entire guest inventory? This cannot be undone without a backup."))return;
+  $("backupForm").onsubmit=e=>{e.preventDefault();if(!pendingBackup||session){$("backupDialog").close();return;}const replace=$("backupMode").value==="replace";if(sales.length){toast("Import disabled while sales history exists to avoid restoring sold holdings.");return;}if(replace&&!confirm("Replace your entire guest inventory? This cannot be undone without a backup."))return;
     const key=x=>JSON.stringify([x.name,x.category,x.qty,x.oz,x.cost,x.date,x.dealer,x.notes]);const ids=new Set(items.map(x=>x.id)),keys=new Set(items.map(key));const incoming=pendingBackup.items.filter(x=>replace||(!ids.has(x.id)&&!keys.has(key(x))));
     const next=replace?incoming:[...items,...incoming], nextGoal=$("restoreGoal").checked?pendingBackup.goal:goal;
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(next));localStorage.setItem("silver-stack-goal",String(nextGoal));}catch(err){toast("Could not save backup to this browser.");return;}
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales}));localStorage.setItem("silver-stack-goal",String(nextGoal));}catch(err){toast("Could not save backup to this browser.");return;}
     items=next;goal=nextGoal;$("backupDialog").close();render();toast(`Imported ${incoming.length} entries`);
   };
+
+  function saleDraft(){
+    const x=items.find(i=>i.id===$("saleItem").value), q=Number($("saleQty").value), p=Number($("salePrice").value), f=Number($("saleFees").value);
+    if(!x||!Number.isFinite(q)||q<=0||q>Number(x.qty)||!$("salePrice").value||!Number.isFinite(p)||p<0||!Number.isFinite(f)||f<0||!$("saleDate").value)return null;
+    const basis=Number(x.cost)>0?Math.round(Number(x.cost)*q/Number(x.qty)*100)/100:null;
+    return {id:crypto.randomUUID(),itemId:x.id,name:x.name,qty:q,oz:q*Number(x.oz),basis,proceeds:p,fees:f,date:$("saleDate").value,buyer:$("saleBuyer").value.trim()};
+  }
+  function renderSales(){
+    const known=sales.filter(s=>s.basis!==null), basis=known.reduce((a,s)=>a+s.basis,0), gain=known.reduce((a,s)=>a+s.proceeds-s.fees-s.basis,0);
+    const card=(label,value)=>`<article class="stat-card"><span>${label}</span><strong>${value}</strong></article>`;
+    const realized=card("REALIZED PROFIT / LOSS",known.length?money(gain):"—")+card("REALIZED ROI",basis>0?fmt(gain/basis*100,2)+"%":"—");
+    $("realizedSummary").innerHTML=session?card("REALIZED RETURNS","Guest only"):realized;
+    $("salesSummary").innerHTML=card("SILVER SOLD",fmt(sales.reduce((a,s)=>a+s.oz,0),4)+" ozt")+card("GROSS PROCEEDS",money(sales.reduce((a,s)=>a+s.proceeds,0)))+realized;
+    $("salesStatus").textContent=session?"Cloud sales are not enabled yet. No account inventory will be changed.":"Guest sales are saved on this device. Returns exclude sales with unknown purchase costs.";
+    $("newSale").disabled=!!session||!items.length;
+    $("salesList").innerHTML=sales.slice().reverse().map(s=>`<div class="activity-card"><div><strong>${safe(s.name)}</strong><small>${safe(s.date)} · ${fmt(s.qty,4)} items · ${fmt(s.oz,4)} ozt · ${safe(s.buyer)}</small><small>Gross ${money(s.proceeds)} · Fees ${money(s.fees)} · Cost ${s.basis===null?"Unknown":money(s.basis)}</small></div><b>${s.basis===null?"Unknown gain":money(s.proceeds-s.fees-s.basis)}</b></div>`).join("")||'<p class="muted">No sales recorded.</p>';
+  }
+  function previewSale(){const s=saleDraft();$("salePreview").textContent=s?`${fmt(s.oz,4)} ozt sold · Net ${money(s.proceeds-s.fees)} · Realized gain ${s.basis===null?"unknown":money(s.proceeds-s.fees-s.basis)}`:"Enter a valid quantity within the selected lot and sale price.";}
+  $("newSale").onclick=()=>{if(session||!items.length)return;$("saleForm").reset();$("saleItem").replaceChildren(...items.map(x=>{const o=document.createElement("option");o.value=x.id;o.textContent=x.name+" — "+x.qty+" available";return o;}));$("saleQty").value=Math.min(1,Number(items[0].qty));$("saleDate").value=new Date().toISOString().slice(0,10);previewSale();$("saleDialog").showModal();};
+  $("saleForm").addEventListener("input",previewSale);$("cancelSale").onclick=()=>$("saleDialog").close();
+  $("saleForm").onsubmit=e=>{e.preventDefault();if(session)return;const s=saleDraft();if(!s){toast("Check sale details.");return;}if(!confirm("Record this sale and deduct the quantity? This cannot be undone in this release."))return;
+    const next=items.map(x=>x.id===s.itemId?{...x,qty:Number(x.qty)-s.qty,cost:s.basis===null?0:Math.max(0,Math.round((Number(x.cost)-s.basis)*100)/100)}:x).filter(x=>x.qty>0), history=[...sales,s];
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales:history}));}catch(e){toast("Sale not saved. Inventory unchanged.");return;}
+    items=next;sales=history;$("saleDialog").close();render();toast("Sale recorded");
+  };
+
   if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
   if(config.supabaseUrl&&config.supabaseAnonKey&&!localStorage.getItem("silver-stack-cache-isolated-v2")){resetCollection();localStorage.setItem("silver-stack-cache-isolated-v2","1");}
   render();loadSpot();setInterval(loadSpot,30000);initAuth();
