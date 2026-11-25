@@ -117,7 +117,7 @@
     document.querySelectorAll(".view").forEach(el=>el.classList.add("hidden"));
     $(view+"View").classList.remove("hidden");
     document.querySelectorAll(".nav-item").forEach(el=>el.classList.toggle("active",el.dataset.view===view));
-    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",sales:"Sales history",settings:"Settings & account"};
+    const titles={overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",sales:"Sales history",settings:"Settings & account",about:"About TrackMySilver",help:"Help & FAQ",feedback:"Feedback & bug reporting",privacy:"Privacy policy",history:"Update history"};
     $("pageTitle").textContent=titles[view];$("eyebrow").textContent=view==="overview"?"YOUR COLLECTION":view.toUpperCase().replace("INVENTORY","COLLECTION");
     render();
   }
@@ -368,6 +368,7 @@
     items=next;sales=history;$("saleDialog").close();render();toast("Sale recorded");
   };
 
+  $("feedbackForm").addEventListener("submit",async e=>{e.preventDefault();const form=e.currentTarget,button=form.querySelector('button[type="submit"]'),status=$("feedbackStatus");button.disabled=true;status.textContent="Sending…";try{const response=await fetch("/",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(new FormData(form)).toString()});if(!response.ok)throw Error("Submission failed");form.reset();status.textContent="Report submitted. Thank you for your feedback!";}catch(err){status.textContent="Could not send feedback. Your message is still here; please try again later.";}finally{button.disabled=false;}});
   if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
   if(config.supabaseUrl&&config.supabaseAnonKey&&!localStorage.getItem("silver-stack-cache-isolated-v2")){resetCollection();localStorage.setItem("silver-stack-cache-isolated-v2","1");}
   render();loadSpot();setInterval(loadSpot,30000);initAuth();
