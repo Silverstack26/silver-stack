@@ -133,7 +133,9 @@
     $("itemOz").value=p.oz;
     updateItemPreview();
   }
+  let cloudReady=false, busy=false;
   function openItem(item){
+    if(session&&(!cloudReady||busy)){toast("Cloud is loading or busy.");return;}
     $("itemForm").reset();$("itemId").value=item?.id||"";
     $("modalTitle").textContent=item?"Edit silver":"Add silver";
     $("itemName").value=item?.name||"";$("itemCategory").value=item?.category||"Rounds";
@@ -142,14 +144,15 @@
     $("itemDealer").value=item?.dealer||"";$("itemNotes").value=item?.notes||"";
     $("itemDialog").showModal();
   }
-  $("itemForm").addEventListener("submit",e=>{
+  $("itemForm").addEventListener("submit",async e=>{
     e.preventDefault();
     const id=$("itemId").value||crypto.randomUUID();
     const old=items.find(x=>x.id===id);
     const item={id,name:$("itemName").value.trim(),category:$("itemCategory").value,qty:Number($("itemQty").value),oz:Number($("itemOz").value),cost:Number($("itemCost").value)||0,date:$("itemDate").value,dealer:$("itemDealer").value.trim(),notes:$("itemNotes").value.trim(),createdAt:old?.createdAt||new Date().toISOString()};
     if(!item.name||!Number.isFinite(item.qty)||item.qty<=0||!Number.isFinite(item.oz)||item.oz<0){toast("Check the item name, quantity, and silver weight.");return;}
+    if(session){await changeCloud(item,old);return;}
     const idx=items.findIndex(x=>x.id===id);if(idx>=0)items[idx]=item;else items.push(item);
-    saveLocal();$("itemDialog").close();render();syncCloud();toast(idx>=0?"Item updated":"Silver added to your stack");
+    saveLocal();$("itemDialog").close();render();toast(idx>=0?"Item updated":"Silver added to your stack");
   });
   $("itemPreset").addEventListener("change",e=>{if(e.target.value)applyPreset(e.target.value);});
   $("itemQty").addEventListener("input",updateItemPreview);
@@ -161,10 +164,10 @@
   $("inventorySearch").addEventListener("input",renderInventory);$("categoryFilter").addEventListener("change",renderInventory);
   document.querySelectorAll(".nav-item").forEach(b=>b.onclick=()=>switchView(b.dataset.view));
   document.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>switchView(b.dataset.goto));
-  $("inventoryRows").addEventListener("click",e=>{
+  $("inventoryRows").addEventListener("click",async e=>{
     const edit=e.target.dataset.edit,del=e.target.dataset.delete;
     if(edit){const x=items.find(i=>i.id===edit);if(x)openItem(x);}
-    if(del&&confirm("Remove this item from your inventory?")){items=items.filter(i=>i.id!==del);saveLocal();render();syncCloud();toast("Item removed");}
+    if(del&&confirm("Remove this item from your inventory?")){if(session){await changeCloud(null,items.find(i=>i.id===del));return;}items=items.filter(i=>i.id!==del);saveLocal();render();toast("Item removed");}
   });
   $("exportCsv").onclick=()=>{
     const rows=[["Name","Category","Quantity","Fine silver per item (ozt)","Total fine silver (ozt)","Purchase cost USD","Purchase date","Dealer","Notes"],...items.map(x=>[x.name,x.category,x.qty,x.oz,x.qty*x.oz,x.cost,x.date,x.dealer,x.notes])];
@@ -175,23 +178,29 @@
   $("clearLocal").onclick=()=>{if(confirm("This clears the inventory saved in this browser. It does not delete any cloud account data. Continue?")){if(session){toast("Sign out first.");return;}items=[];sales=[];saveLocal();render();toast("Local inventory cleared");}};
   function downloadFile(name,data,type){const a=document.createElement("a"),url=URL.createObjectURL(new Blob([data],{type}));a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
   function syncSettings(){if(!supabase||!session)return;supabase.from("silver_stack_settings").upsert({user_id:session.user.id,goal_oz:goal},{onConflict:"user_id"}).then(({error})=>{if(error)console.error(error);});}
-  async function syncCloud(){
-    if(!supabase||!session)return;
-    const payload=items.map(x=>({id:x.id,user_id:session.user.id,name:x.name,category:x.category,quantity:x.qty,fine_oz_each:x.oz,cost_total:x.cost,purchase_date:x.date||null,dealer:x.dealer,notes:x.notes,created_at:x.createdAt}));
-    const {error:delErr}=await supabase.from("silver_stack_items").delete().eq("user_id",session.user.id);
-    if(delErr){toast("Cloud sync error: "+delErr.message);return;}
-    if(payload.length){const {error}=await supabase.from("silver_stack_items").insert(payload);if(error){toast("Cloud sync error: "+error.message);return;}}
-    syncSettings();
+  async function changeCloud(item,old){
+    if(!cloudReady||busy||!session)return;
+    const u=session.user.id;busy=true;renderSales();
+    try{
+      const payload=item&&{id:item.id,user_id:u,name:item.name,category:item.category,quantity:item.qty,fine_oz_each:item.oz,cost_total:item.cost,purchase_date:item.date||null,dealer:item.dealer,notes:item.notes,created_at:item.createdAt};
+      let q;
+      if(old){q=(item?supabase.from("silver_stack_items").update(payload):supabase.from("silver_stack_items").delete()).eq("id",old.id).eq("user_id",u).eq("quantity",old.qty).eq("cost_total",old.cost).eq("fine_oz_each",old.oz).select("id");}else{q=supabase.from("silver_stack_items").insert(payload).select("id");}
+      const {data,error}=await q;if(error||!data?.length)throw Error(error?.message||"Inventory changed on another device.");
+      if(session?.user.id===u){if($("itemDialog").open)$("itemDialog").close();toast("Inventory saved");}
+    }catch(e){toast(e.message);}finally{if(session?.user.id===u)await loadCloud();busy=false;renderSales();}
   }
   async function loadCloud(){
-    const userId=session?.user.id;if(!userId)return;
+    const userId=session?.user.id;if(!userId)return;cloudReady=false;renderSales();
     const {data,error}=await supabase.from("silver_stack_items").select("*").eq("user_id",userId).order("created_at",{ascending:false});
     if(error){toast("Could not load cloud inventory: "+error.message);return;}
     if(session?.user.id!==userId)return;
     const loadedItems=(data||[]).map(x=>({id:x.id,name:x.name,category:x.category,qty:Number(x.quantity),oz:Number(x.fine_oz_each),cost:Number(x.cost_total||0),date:x.purchase_date||"",dealer:x.dealer||"",notes:x.notes||"",createdAt:x.created_at}));
     const {data:s}=await supabase.from("silver_stack_settings").select("goal_oz").eq("user_id",userId).maybeSingle();
     if(session?.user.id!==userId)return;
-    items=loadedItems;goal=Number(s?.goal_oz||100);
+    const {data:history,error:saleError}=await supabase.from("silver_stack_sales").select("*").eq("user_id",userId).order("created_at",{ascending:true});
+    if(session?.user.id!==userId)return;
+    if(saleError){toast("Cloud sales unavailable: "+saleError.message);return;}
+    items=loadedItems;goal=Number(s?.goal_oz||100);sales=(history||[]).map(x=>({id:x.id,itemId:x.item_id,name:x.name,qty:Number(x.quantity),oz:Number(x.fine_oz),basis:x.basis===null?null:Number(x.basis),proceeds:Number(x.proceeds),fees:Number(x.fees),date:x.sale_date,buyer:x.buyer||""}));cloudReady=true;
     render();toast("Your cloud collection is synced");
   }
   const recoveryReturn = new URLSearchParams(location.search).get("recovery")==="1";
@@ -263,7 +272,7 @@
   }
   function resetCollection(){
     if($("backupDialog").open)$("backupDialog").close();
-    items=[];sales=[];goal=100;
+    cloudReady=false;items=[];sales=[];goal=100;
     if($("saleDialog").open)$("saleDialog").close();
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem("silver-stack-goal");
@@ -342,16 +351,18 @@
     const known=sales.filter(s=>s.basis!==null), basis=known.reduce((a,s)=>a+s.basis,0), gain=known.reduce((a,s)=>a+s.proceeds-s.fees-s.basis,0);
     const card=(label,value)=>`<article class="stat-card"><span>${label}</span><strong>${value}</strong></article>`;
     const realized=card("REALIZED PROFIT / LOSS",known.length?money(gain):"—")+card("REALIZED ROI",basis>0?fmt(gain/basis*100,2)+"%":"—");
-    $("realizedSummary").innerHTML=session?card("REALIZED RETURNS","Guest only"):realized;
+    $("realizedSummary").innerHTML=session&&!cloudReady?card("REALIZED RETURNS","Unavailable"):realized;
     $("salesSummary").innerHTML=card("SILVER SOLD",fmt(sales.reduce((a,s)=>a+s.oz,0),4)+" ozt")+card("GROSS PROCEEDS",money(sales.reduce((a,s)=>a+s.proceeds,0)))+realized;
-    $("salesStatus").textContent=session?"Cloud sales are not enabled yet. No account inventory will be changed.":"Guest sales are saved on this device. Returns exclude sales with unknown purchase costs.";
-    $("newSale").disabled=!!session||!items.length;
+    $("salesStatus").textContent=session?(cloudReady?"Sales are saved to your account. Returns exclude unknown purchase costs.":"Cloud data loading or unavailable. Refresh to retry."):"Guest sales are saved on this device. Returns exclude sales with unknown purchase costs.";
+    $("newSale").disabled=(!!session&&!cloudReady)||busy||!items.length;
     $("salesList").innerHTML=sales.slice().reverse().map(s=>`<div class="activity-card"><div><strong>${safe(s.name)}</strong><small>${safe(s.date)} · ${fmt(s.qty,4)} items · ${fmt(s.oz,4)} ozt · ${safe(s.buyer)}</small><small>Gross ${money(s.proceeds)} · Fees ${money(s.fees)} · Cost ${s.basis===null?"Unknown":money(s.basis)}</small></div><b>${s.basis===null?"Unknown gain":money(s.proceeds-s.fees-s.basis)}</b></div>`).join("")||'<p class="muted">No sales recorded.</p>';
   }
   function previewSale(){const s=saleDraft();$("salePreview").textContent=s?`${fmt(s.oz,4)} ozt sold · Net ${money(s.proceeds-s.fees)} · Realized gain ${s.basis===null?"unknown":money(s.proceeds-s.fees-s.basis)}`:"Enter a valid quantity within the selected lot and sale price.";}
-  $("newSale").onclick=()=>{if(session||!items.length)return;$("saleForm").reset();$("saleItem").replaceChildren(...items.map(x=>{const o=document.createElement("option");o.value=x.id;o.textContent=x.name+" — "+x.qty+" available";return o;}));$("saleQty").value=Math.min(1,Number(items[0].qty));$("saleDate").value=new Date().toISOString().slice(0,10);previewSale();$("saleDialog").showModal();};
+  $("newSale").onclick=()=>{if((session&&!cloudReady)||busy||!items.length)return;$("saleForm").reset();$("saleItem").replaceChildren(...items.map(x=>{const o=document.createElement("option");o.value=x.id;o.textContent=x.name+" — "+x.qty+" available";return o;}));$("saleQty").value=Math.min(1,Number(items[0].qty));$("saleDate").value=new Date().toISOString().slice(0,10);previewSale();$("saleDialog").showModal();};
   $("saleForm").addEventListener("input",previewSale);$("cancelSale").onclick=()=>$("saleDialog").close();
-  $("saleForm").onsubmit=e=>{e.preventDefault();if(session)return;const s=saleDraft();if(!s){toast("Check sale details.");return;}if(!confirm("Record this sale and deduct the quantity? This cannot be undone in this release."))return;
+  $("saleForm").onsubmit=async e=>{e.preventDefault();if(busy||(session&&!cloudReady))return;const s=saleDraft();if(!s){toast("Check sale details.");return;}if(!confirm("Record this sale and deduct the quantity? This cannot be undone in this release."))return;
+    if(session){const u=session.user.id,x=items.find(i=>i.id===s.itemId);busy=true;renderSales();const button=$("saleForm").querySelector('button[type="submit"],button:not([type])');if(button)button.disabled=true;
+      try{const {error}=await supabase.rpc("record_silver_sale",{p_id:s.id,p_item:s.itemId,p_qty:s.qty,p_proceeds:s.proceeds,p_fees:s.fees,p_date:s.date,p_buyer:s.buyer,p_expected_qty:x.qty,p_expected_cost:x.cost,p_expected_oz:x.oz});if(error)throw Error(error.message);if(session?.user.id===u)toast("Cloud sale recorded");}catch(e){toast("Sale result uncertain or rejected. Check history before retrying: "+e.message);}finally{if(session?.user.id===u){$("saleDialog").close();await loadCloud();}busy=false;if(button)button.disabled=false;renderSales();}return;}
     const next=items.map(x=>x.id===s.itemId?{...x,qty:Number(x.qty)-s.qty,cost:s.basis===null?0:Math.max(0,Math.round((Number(x.cost)-s.basis)*100)/100)}:x).filter(x=>x.qty>0), history=[...sales,s];
     try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales:history}));}catch(e){toast("Sale not saved. Inventory unchanged.");return;}
     items=next;sales=history;$("saleDialog").close();render();toast("Sale recorded");
