@@ -35,7 +35,7 @@
   const totalOz = () => items.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.oz)||0),0);
   const totalCost = () => items.reduce((s,x)=>s+(Number(x.cost)||0),0);
   const safe = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  function saveLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify(items));localStorage.setItem("silver-stack-goal",String(goal));}
+  function saveLocal(){if(session)return;localStorage.setItem(STORAGE_KEY,JSON.stringify(items));localStorage.setItem("silver-stack-goal",String(goal));}
   function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2600);}
   function dateLabel(d){if(!d)return "Date not recorded";return new Date(d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});}
   async function loadSpot(){
@@ -161,19 +161,41 @@
     syncSettings();
   }
   async function loadCloud(){
-    const {data,error}=await supabase.from("silver_stack_items").select("*").order("created_at",{ascending:false});
+    const userId=session?.user.id;if(!userId)return;
+    const {data,error}=await supabase.from("silver_stack_items").select("*").eq("user_id",userId).order("created_at",{ascending:false});
     if(error){toast("Could not load cloud inventory: "+error.message);return;}
-    items=(data||[]).map(x=>({id:x.id,name:x.name,category:x.category,qty:Number(x.quantity),oz:Number(x.fine_oz_each),cost:Number(x.cost_total||0),date:x.purchase_date||"",dealer:x.dealer||"",notes:x.notes||"",createdAt:x.created_at}));
-    const {data:s}=await supabase.from("silver_stack_settings").select("goal_oz").maybeSingle();
-    if(s?.goal_oz)goal=Number(s.goal_oz);
-    saveLocal();render();toast("Your cloud collection is synced");
+    if(session?.user.id!==userId)return;
+    const loadedItems=(data||[]).map(x=>({id:x.id,name:x.name,category:x.category,qty:Number(x.quantity),oz:Number(x.fine_oz_each),cost:Number(x.cost_total||0),date:x.purchase_date||"",dealer:x.dealer||"",notes:x.notes||"",createdAt:x.created_at}));
+    const {data:s}=await supabase.from("silver_stack_settings").select("goal_oz").eq("user_id",userId).maybeSingle();
+    if(session?.user.id!==userId)return;
+    items=loadedItems;goal=Number(s?.goal_oz||100);
+    render();toast("Your cloud collection is synced");
   }
   async function initAuth(){
     if(!config.supabaseUrl||!config.supabaseAnonKey||!window.supabase){$("authStatus").textContent="Guest mode is ready. Cloud accounts become available after Supabase is configured in config.js.";return;}
     supabase=window.supabase.createClient(config.supabaseUrl,config.supabaseAnonKey);
-    const {data}=await supabase.auth.getSession();session=data.session;updateAuthUI();
-    if(session)await loadCloud();
-    supabase.auth.onAuthStateChange(async(_event,s)=>{session=s;updateAuthUI();if(s)await loadCloud();});
+    const {data}=await supabase.auth.getSession();
+    applySession(data.session);
+    supabase.auth.onAuthStateChange((_event,s)=>{applySession(s);});
+  }
+  function resetCollection(){
+    items=[];goal=100;
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem("silver-stack-goal");
+    $("authEmail").value="";$("authPassword").value="";
+    $("inventorySearch").value="";$("categoryFilter").value="all";
+    if($("itemDialog").open)$("itemDialog").close();
+    $("itemForm").reset();$("itemId").value="";
+    render();
+  }
+  function applySession(next){
+    const previous=session?.user.id;
+    session=next;
+    if(previous!==session?.user.id){
+      resetCollection();
+      if(session){const id=session.user.id;setTimeout(()=>{if(session?.user.id===id)loadCloud();},0);}
+    }
+    updateAuthUI();
   }
   function updateAuthUI(){
     const logged=!!session;
@@ -184,7 +206,8 @@
   }
   $("signUp").onclick=async()=>{if(!supabase){toast("Cloud setup needed first — see README.");return;}const email=$("authEmail").value,password=$("authPassword").value;if(password.length<8){toast("Use a password with at least 8 characters.");return;}const {error}=await supabase.auth.signUp({email,password});toast(error?error.message:"Check your email to confirm your account.");};
   $("signIn").onclick=async()=>{if(!supabase){toast("Cloud setup needed first — see README.");return;}const {error}=await supabase.auth.signInWithPassword({email:$("authEmail").value,password:$("authPassword").value});if(error)toast(error.message);};
-  $("signOut").onclick=async()=>{await supabase.auth.signOut();session=null;updateAuthUI();toast("Signed out");};
+  $("signOut").onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){toast(error.message);return;}session=null;resetCollection();updateAuthUI();switchView("settings");toast("Signed out");};
   if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  if(config.supabaseUrl&&config.supabaseAnonKey&&!localStorage.getItem("silver-stack-cache-isolated-v2")){resetCollection();localStorage.setItem("silver-stack-cache-isolated-v2","1");}
   render();loadSpot();setInterval(loadSpot,30000);initAuth();
 })();
