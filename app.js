@@ -113,7 +113,7 @@
   function renderInventory(){
     const list=visibleItems();for(const id of selected)if(!list.some(x=>x.id===id))selected.delete(id);
     $("inventoryRows").innerHTML=list.map(x=>`<tr><td><input type="checkbox" data-select="${safe(x.id)}" aria-label="Select ${safe(x.name)}" ${selected.has(x.id)?"checked":""}></td><td><strong>${safe(x.name)}</strong><small>${safe(x.dealer||"")}</small></td><td>${safe(x.category)}</td><td>${fmt(x.qty,3)}</td><td><strong>${fmt(x.qty*x.oz,4)} ozt</strong></td><td>${x.cost?money(x.cost):"—"}</td><td>${spot===null?"—":money(x.qty*x.oz*spot)}</td><td>${x.purchaseSpot>0&&x.cost>0&&x.qty*x.oz>0?money(x.cost/(x.qty*x.oz)-x.purchaseSpot):"—"}</td><td class="row-actions"><button data-edit="${safe(x.id)}">Edit</button> · <button data-duplicate="${safe(x.id)}">Duplicate</button> · <button data-delete="${safe(x.id)}">Delete</button></td></tr>`).join("")||'<tr><td colspan="9" class="empty-cell">No matching silver found.</td></tr>';
-    $("selectionCount").textContent=selected.size+" selected";$("selectVisible").checked=!!list.length&&selected.size===list.length;$("bulkEdit").disabled=!selected.size||busy||(!!session&&!cloudReady);
+    $("selectionCount").textContent=selected.size+" selected";$("selectVisible").checked=!!list.length&&selected.size===list.length;$("mobileSelectVisible").checked=$("selectVisible").checked;$("bulkEdit").disabled=!selected.size||busy||(!!session&&!cloudReady);
     const totals=xs=>{const w=xs.reduce((a,x)=>a+x.qty*x.oz,0),cost=xs.reduce((a,x)=>a+x.cost,0);return `${fmt(xs.reduce((a,x)=>a+x.qty,0),3)} items · ${fmt(w,4)} ozt · ${money(cost)} recorded cost · ${spot===null?"—":money(w*spot)} spot value`;};
     $("categorySummary").innerHTML=categories.map((cat,i)=>{const xs=items.filter(x=>x.category===cat),w=xs.reduce((a,x)=>a+x.qty*x.oz,0),g=Number(categoryGoals[cat])||0;return `<div class="summary-row"><strong>${cat}</strong><p>${totals(xs)}</p><button class="text-button" data-category-goal="${i}">${g?fmt(w,2)+" / "+fmt(g,2)+" ozt — edit goal":"Set goal"}</button>${g?`<div class="progress-track"><div class="progress-fill" style="width:${Math.min(100,w/g*100)}%"></div></div>`:""}</div>`;}).join("");
     const dealers=new Map();for(const x of items){const key=(x.dealer||"").trim()||"Not recorded";if(!dealers.has(key))dealers.set(key,[]);dealers.get(key).push(x);}$("dealerSummary").innerHTML=[...dealers].map(([name,xs])=>`<div class="summary-row"><strong>${safe(name)}</strong><p>${totals(xs)}</p></div>`).join("")||"No holdings recorded.";
@@ -124,9 +124,13 @@
   }
   function switchView(view){
     currentView=view;
+    $("mobileMenu").classList.add("hidden");$("mobileMore").setAttribute("aria-expanded","false");
+    if(matchMedia("(max-width:700px)").matches) window.scrollTo(0,0);
     document.querySelectorAll(".view").forEach(el=>el.classList.add("hidden"));
     $(view+"View").classList.remove("hidden");
     document.querySelectorAll(".nav-item").forEach(el=>el.classList.toggle("active",el.dataset.view===view));
+    $("mobileMore").classList.toggle("active",["activity","analytics","sales","settings"].includes(view));
+    document.querySelectorAll(".nav-item").forEach(el=>{if(el.dataset.view===view)el.setAttribute("aria-current","page");else el.removeAttribute("aria-current");});
     const titles={market:"Silver market",overview:"Overview",inventory:"My inventory",activity:"Purchase log",analytics:"Portfolio analytics",tools:"Stacking tools",sales:"Sales history",settings:"Settings & account",about:"About TrackMySilver",help:"Help & FAQ",feedback:"Feedback & bug reporting",privacy:"Privacy policy",history:"Update history"};
     $("pageTitle").textContent=titles[view];$("eyebrow").textContent=view==="overview"?"YOUR COLLECTION":view.toUpperCase().replace("INVENTORY","COLLECTION");
     render();
@@ -172,6 +176,10 @@
   $("editGoal").onclick=()=>switchView("settings");
   $("saveGoal").onclick=()=>{const v=Number($("goalInput").value);if(v>0){goal=v;saveLocal();render();syncSettings();toast("Stacking goal updated");}};
   $("inventorySearch").addEventListener("input",renderInventory);$("categoryFilter").addEventListener("change",renderInventory);
+  $("mobileMore").onclick=()=>{const open=$("mobileMenu").classList.toggle("hidden")===false;$("mobileMore").setAttribute("aria-expanded",String(open));};
+  document.addEventListener("click",e=>{if(!e.target.closest("#mobileMenu,#mobileMore")){$("mobileMenu").classList.add("hidden");$("mobileMore").setAttribute("aria-expanded","false");}});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("mobileMenu").classList.contains("hidden")){$("mobileMenu").classList.add("hidden");$("mobileMore").setAttribute("aria-expanded","false");$("mobileMore").focus();}});
+  $("mobileSelectVisible").onchange=e=>{$("selectVisible").checked=e.target.checked;$("selectVisible").dispatchEvent(new Event("change"));};
   document.querySelectorAll(".nav-item").forEach(b=>b.onclick=()=>switchView(b.dataset.view));
   document.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>switchView(b.dataset.goto));
   $("inventoryRows").addEventListener("click",async e=>{

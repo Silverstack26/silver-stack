@@ -1,6 +1,6 @@
 {
-  "name": "Silver Stack Tracker",
-  "short_name": "Silver Stack",
+  "name": "TrackMySilver \u2014 Silver Stack Tracker",
+  "short_name": "TrackMySilver",
   "description": "Track your physical silver collection and its spot value.",
   "start_url": "./",
   "display": "standalone",
@@ -13,5 +13,7 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "id": "./",
+  "scope": "./"
 }

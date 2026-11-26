@@ -1,5 +1,5 @@
-const CACHE = 'silver-stack-v270';
-const CORE = ['./index.html','./styles.css?v=270','./app.js?v=270','./config.js','./manifest.webmanifest','./icon.svg'];
+const CACHE = 'silver-stack-v280';
+const CORE = ['./index.html','./styles.css?v=280','./app.js?v=280','./config.js','./manifest.webmanifest','./icon.svg'];
 self.addEventListener('install', event => event.waitUntil((async()=>{
   const cache = await caches.open(CACHE);
   await cache.addAll(CORE.map(url=>new Request(url,{cache:'reload'})));
