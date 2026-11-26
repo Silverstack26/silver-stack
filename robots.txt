@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://trackmysilver.com/sitemap.xml
