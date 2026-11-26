@@ -5,7 +5,7 @@
   const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
   let items = Array.isArray(stored)?stored:stored.items;
   let sales = Array.isArray(stored)?[]:(stored.sales||[]);
-  let goal = Number(localStorage.getItem("silver-stack-goal") || 100);
+  let goal = Number(stored.goal ?? localStorage.getItem("silver-stack-goal") ?? 100);
   let categoryGoals = Array.isArray(stored)?{}:(stored.categoryGoals||{});
   const selected = new Set(), categories=["Rounds","Bars","Constitutional","Foreign coins","Collectibles","Other"];
   let spot = null, spotUpdated = null, supabase = null, session = null, currentView = "overview";
@@ -39,7 +39,7 @@
   const totalOz = () => items.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.oz)||0),0);
   const totalCost = () => items.reduce((s,x)=>s+(Number(x.cost)||0),0);
   const safe = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  function saveLocal(){if(session)return;localStorage.setItem(STORAGE_KEY,JSON.stringify({items,sales,categoryGoals}));localStorage.setItem("silver-stack-goal",String(goal));}
+  function saveLocal(){if(session)return;localStorage.setItem(STORAGE_KEY,JSON.stringify({items,sales,categoryGoals,goal,portfolioHistory}));}
   function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2600);}
   function dateLabel(d){if(!d)return "Date not recorded";return new Date(d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});}
   async function loadSpot(){
@@ -184,8 +184,8 @@
     const csv=rows.map(r=>r.map(v=>'"'+String(v??"").replace(/"/g,'""')+'"').join(",")).join("\n");
     downloadFile("silver-stack-inventory.csv",csv,"text/csv");toast("CSV exported");
   };
-  $("downloadBackup").onclick=()=>downloadFile("silver-stack-backup.json",JSON.stringify({items,sales,goal,exportedAt:new Date().toISOString()},null,2),"application/json");
-  $("clearLocal").onclick=()=>{if(confirm("This clears the inventory saved in this browser. It does not delete any cloud account data. Continue?")){if(session){toast("Sign out first.");return;}items=[];sales=[];saveLocal();render();toast("Local inventory cleared");}};
+  $("downloadBackup").onclick=async()=>{try{const b=await currentBackup();exportBackup(b);toast("Backup downloaded");}catch(e){toast(e.message);}};
+  $("clearLocal").onclick=()=>{if(confirm("This clears the inventory saved in this browser. It does not delete any cloud account data. Continue?")){if(session){toast("Sign out first.");return;}items=[];sales=[];portfolioHistory=[];localStorage.removeItem(guestHistoryKey);saveLocal();render();toast("Local inventory cleared");}};
   function downloadFile(name,data,type){const a=document.createElement("a"),url=URL.createObjectURL(new Blob([data],{type}));a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
   function syncSettings(){if(!supabase||!session)return;supabase.from("silver_stack_settings").upsert({user_id:session.user.id,goal_oz:goal},{onConflict:"user_id"}).then(({error})=>{if(error)console.error(error);});}
   async function changeCloud(item,old){
@@ -332,26 +332,39 @@
   }
   for(const id of ["manualSpot","toolSpot","bullQty","bullOz","bullPrice","coinType","coinMode","coinAmount","coinPrice"]) $(id).addEventListener("input",renderTools);
   let pendingBackup=null;
+  const uuidOK=x=>typeof x==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
   function validateBackup(b){
-    if(b?.sales?.length)throw Error("Backups containing sales cannot yet be imported. Keep this file for your records.");
-    if(!b||!Array.isArray(b.items)||b.items.length>10000)throw Error("Invalid backup format or too many entries.");
-    const ids=new Set(), cats=["Rounds","Bars","Constitutional","Foreign coins","Collectibles","Other"];
-    const clean=b.items.map(x=>{
-      if(!x||typeof x.id!=="string"||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x.id)||ids.has(x.id))throw Error("Invalid or duplicate item ID.");ids.add(x.id);
-      if(typeof x.name!=="string"||!x.name.trim()||!cats.includes(x.category)||!Number.isFinite(x.qty)||x.qty<=0||!Number.isFinite(x.oz)||x.oz<0||!Number.isFinite(x.cost)||x.cost<0||!Number.isFinite(x.qty*x.oz))throw Error("Invalid inventory entry.");
-      const date=x.date||"";if(date&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date))throw Error("Invalid purchase date.");
-      return {id:x.id,name:x.name,category:x.category,qty:x.qty,oz:x.oz,cost:x.cost,date,dealer:String(x.dealer||""),notes:String(x.notes||""),purchaseSpot:Number.isFinite(x.purchaseSpot)&&x.purchaseSpot>0?x.purchaseSpot:null,createdAt:typeof x.createdAt==="string"&&Number.isFinite(Date.parse(x.createdAt))?new Date(x.createdAt).toISOString():new Date().toISOString()};
-    });return {items:clean,goal:Number.isFinite(b.goal)&&b.goal>0?b.goal:null};
+    if(!b||!Array.isArray(b.items)||b.items.length>10000|| (b.version!==undefined&&b.version!==3))throw Error("Unsupported backup format.");
+    const full=b.version===3;
+    if(full&&(!Array.isArray(b.sales)||!Array.isArray(b.portfolioHistory)||!b.categoryGoals||typeof b.categoryGoals!=="object"||Array.isArray(b.categoryGoals)))throw Error("Incomplete full backup.");
+    const num=(v,min,max)=>{if(typeof v!=="number"||!Number.isFinite(v)||v<min||v>max)throw Error("Invalid numeric value.");return v;};
+    const str=(v,max=10000)=>{if(typeof v!=="string"||v.length>max)throw Error("Invalid text field.");return v;};
+    const day=v=>{if(typeof v!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(v)||!Number.isFinite(Date.parse(v))||new Date(v).toISOString().slice(0,10)!==v)throw Error("Invalid date.");return v;};
+    const id=(v,seen)=>{if(!uuidOK(v)||seen.has(v.toLowerCase()))throw Error("Invalid or duplicate ID.");seen.add(v.toLowerCase());return v.toLowerCase();};
+    const ids=new Set(),sids=new Set(),days=new Set();
+    const clean=b.items.map(x=>{if(!x||!categories.includes(x.category)||!str(x.name,500).trim())throw Error("Invalid inventory entry.");return {id:id(x.id,ids),name:x.name,category:x.category,qty:num(x.qty,.000001,99999999),oz:num(x.oz,0,999999),cost:num(x.cost,0,999999999999),date:x.date?day(x.date):"",dealer:str(x.dealer||""),notes:str(x.notes||""),purchaseSpot:x.purchaseSpot==null?null:num(x.purchaseSpot,.01,999999999999),createdAt:x.createdAt&&Number.isFinite(Date.parse(x.createdAt))?new Date(x.createdAt).toISOString():new Date().toISOString()};});
+    const ss=b.sales??[];if(!Array.isArray(ss)||ss.length>10000)throw Error("Invalid sales list.");
+    const sold=ss.map(x=>{if(!uuidOK(x.itemId))throw Error("Invalid sale item ID.");return {id:id(x.id,sids),itemId:x.itemId.toLowerCase(),name:str(x.name,500),qty:num(x.qty,.000001,99999999),oz:num(x.oz,0,1e15),basis:x.basis==null?null:num(x.basis,0,999999999999),proceeds:num(x.proceeds,0,999999999999),fees:num(x.fees,0,999999999999),date:day(x.date),buyer:str(x.buyer||"")};});
+    const hist=b.portfolioHistory??[];if(!Array.isArray(hist)||hist.length>10000)throw Error("Invalid history list.");
+    const snapshots=hist.map(x=>{const d=day(x.day);if(days.has(d))throw Error("Duplicate snapshot date.");days.add(d);const price=num(x.price,.000001,1e12),oz=num(x.oz,0,1e15);return {day:d,price,oz,value:price*oz};});
+    const goals={};for(const [k,v] of Object.entries(b.categoryGoals||{})){if(!categories.includes(k))throw Error("Invalid category goal.");goals[k]=num(v,.000001,1e9);}
+    return {version:full?3:2,items:clean,sales:sold,goal:b.goal==null?null:num(b.goal,.000001,99999999),categoryGoals:goals,portfolioHistory:snapshots};
   }
-  $("importBackup").onclick=()=>{if(session){toast("For safety, cloud imports are not enabled yet. Use guest mode.");return;}$("backupFile").click();};
-  $("backupFile").onchange=async()=>{const f=$("backupFile").files[0];$("backupFile").value="";if(!f)return;try{if(f.size>10000000)throw Error("Backup exceeds 10 MB.");const b=validateBackup(JSON.parse(await f.text()));if(session)throw Error("Sign out before importing.");pendingBackup=b;$("backupPreview").textContent=`${b.items.length} entries · ${fmt(b.items.reduce((s,x)=>s+x.qty*x.oz,0),4)} ozt. Current inventory: ${items.length} entries.`;$("backupMode").value="merge";$("restoreGoal").checked=false;$("restoreGoal").disabled=b.goal===null;$("backupDialog").showModal();}catch(e){toast(e.message);}};
+  function localBackup(){return {version:3,items,sales,goal,categoryGoals,portfolioHistory,exportedAt:new Date().toISOString()};}
+  async function currentBackup(){if(!authResolved||busy||historyBusy)throw Error("Wait for synchronization, then retry.");if(!session)return localBackup();const uid=session.user.id;const {data,error}=await supabase.rpc("export_silver_backup");if(error)throw Error(error.message);if(session?.user.id!==uid)throw Error("Account changed.");return data;}
+  function exportBackup(b){downloadFile("silver-stack-backup-"+new Date().toISOString().slice(0,10)+".json",JSON.stringify(b,null,2),"application/json");}
+  $("importBackup").onclick=()=>{if(busy||!authResolved)return;$("backupFile").click();};
+  $("backupFile").onchange=async()=>{const f=$("backupFile").files[0];$("backupFile").value="";if(!f)return;const uid=session?.user.id||null;try{if(f.size>10000000)throw Error("Backup exceeds 10 MB.");const b=validateBackup(JSON.parse(await f.text()));if((session?.user.id||null)!==uid)throw Error("Account changed.");pendingBackup={b,uid};$("backupPreview").textContent=`${b.items.length} inventory entries · ${fmt(b.items.reduce((s,x)=>s+x.qty*x.oz,0),4)} ozt · ${b.sales.length} sales · ${b.portfolioHistory.length} snapshots. ${b.version===3?"Complete backup":"Legacy backup: merge only"}.`;$("backupMode").value="merge";$("backupMode").options[1].disabled=b.version!==3;$("restoreGoal").checked=false;$("restoreGoal").disabled=b.goal===null;$("backupDialog").showModal();}catch(e){toast(e.message);}};
   $("cancelBackup").onclick=()=>$("backupDialog").close();$("backupDialog").addEventListener("close",()=>{pendingBackup=null;});
-  $("backupForm").onsubmit=e=>{e.preventDefault();if(!pendingBackup||session){$("backupDialog").close();return;}const replace=$("backupMode").value==="replace";if(sales.length){toast("Import disabled while sales history exists to avoid restoring sold holdings.");return;}if(replace&&!confirm("Replace your entire guest inventory? This cannot be undone without a backup."))return;
-    const key=x=>JSON.stringify([x.name,x.category,x.qty,x.oz,x.cost,x.date,x.dealer,x.notes]);const ids=new Set(items.map(x=>x.id)),keys=new Set(items.map(key));const incoming=pendingBackup.items.filter(x=>replace||(!ids.has(x.id)&&!keys.has(key(x))));
-    const next=replace?incoming:[...items,...incoming], nextGoal=$("restoreGoal").checked?pendingBackup.goal:goal;
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales,categoryGoals}));localStorage.setItem("silver-stack-goal",String(nextGoal));}catch(err){toast("Could not save backup to this browser.");return;}
-    items=next;goal=nextGoal;$("backupDialog").close();render();toast(`Imported ${incoming.length} entries`);
-  };
+  $("backupForm").onsubmit=async e=>{e.preventDefault();if(!pendingBackup||busy||historyBusy)return;const {b,uid}=pendingBackup;if((session?.user.id||null)!==uid)return;const replace=$("backupMode").value==="replace", restore=$("restoreGoal").checked;const button=e.target.querySelector('[type="submit"]');
+    try{const before=await currentBackup();if((session?.user.id||null)!==uid||busy||historyBusy)throw Error("Account or synchronization changed; retry.");
+      if(replace&&b.version!==3)throw Error("Only complete backups can replace a collection.");
+      if(!replace&&(before.sales.length||b.sales.length))throw Error("Merge is disabled when either collection contains sales, to avoid resurrecting sold inventory. Use a complete replacement backup instead.");
+      if(replace){exportBackup(before);if(!confirm("A safety backup was requested. Confirm it downloaded successfully before replacing ALL inventory, sales and portfolio history. Continue?"))return;}
+      busy=true;button.disabled=true;
+      if(uid){const {error}=await supabase.rpc("restore_silver_backup",{p_backup:b,p_before:before,p_replace:replace,p_goals:restore});if(error)throw Error(error.message);if(session?.user.id===uid){$("backupDialog").close();await loadCloud();toast("Cloud restoration saved");}}
+      else{const ids=new Set(items.map(x=>x.id)),key=x=>JSON.stringify([x.name,x.category,x.qty,x.oz,x.cost,x.date,x.dealer,x.notes,x.purchaseSpot??null]),keys=new Set(items.map(key));const next=replace?b.items:[...items,...b.items.filter(x=>!ids.has(x.id)&&!keys.has(key(x)))];const nextSales=replace?b.sales:sales;const nextHistory=replace?b.portfolioHistory:[...portfolioHistory,...b.portfolioHistory.filter(x=>!portfolioHistory.some(y=>y.day===x.day))].sort((x,y)=>x.day.localeCompare(y.day));const nextGoal=restore?b.goal:goal,nextGoals=restore&&b.version===3?b.categoryGoals:categoryGoals;localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales:nextSales,goal:nextGoal,categoryGoals:nextGoals,portfolioHistory:nextHistory}));items=next;sales=nextSales;goal=nextGoal;categoryGoals=nextGoals;portfolioHistory=nextHistory;$("backupDialog").close();render();toast("Guest restoration saved");}
+    }catch(err){toast("Restore not confirmed: "+err.message);}finally{busy=false;button.disabled=false;renderSales();}};
 
   function saleDraft(){
     const x=items.find(i=>i.id===$("saleItem").value), q=Number($("saleQty").value), p=Number($("salePrice").value), f=Number($("saleFees").value);
@@ -376,7 +389,7 @@
     if(session){const u=session.user.id,x=items.find(i=>i.id===s.itemId);busy=true;renderSales();const button=$("saleForm").querySelector('button[type="submit"],button:not([type])');if(button)button.disabled=true;
       try{const {error}=await supabase.rpc("record_silver_sale",{p_id:s.id,p_item:s.itemId,p_qty:s.qty,p_proceeds:s.proceeds,p_fees:s.fees,p_date:s.date,p_buyer:s.buyer,p_expected_qty:x.qty,p_expected_cost:x.cost,p_expected_oz:x.oz});if(error)throw Error(error.message);if(session?.user.id===u)toast("Cloud sale recorded");}catch(e){toast("Sale result uncertain or rejected. Check history before retrying: "+e.message);}finally{if(session?.user.id===u){$("saleDialog").close();await loadCloud();}busy=false;if(button)button.disabled=false;renderSales();}return;}
     const next=items.map(x=>x.id===s.itemId?{...x,qty:Number(x.qty)-s.qty,cost:s.basis===null?0:Math.max(0,Math.round((Number(x.cost)-s.basis)*100)/100)}:x).filter(x=>x.qty>0), history=[...sales,s];
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales:history,categoryGoals}));}catch(e){toast("Sale not saved. Inventory unchanged.");return;}
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({items:next,sales:history,categoryGoals,goal,portfolioHistory}));}catch(e){toast("Sale not saved. Inventory unchanged.");return;}
     items=next;sales=history;$("saleDialog").close();render();toast("Sale recorded");
   };
 
@@ -394,13 +407,14 @@
 
   const historyKey="silver-stack-market-history", guestHistoryKey="silver-stack-guest-history";
   function readHistory(key){try{const a=JSON.parse(localStorage.getItem(key)||"[]");return Array.isArray(a)?a.filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x.day)&&Number.isFinite(x.price)&&x.price>0):[];}catch(e){return [];}}
-  let marketHistory=readHistory(historyKey), portfolioHistory=readHistory(guestHistoryKey), historyOwner=null, historyBusy=false, historyMessage="", authResolved=false, freshQuote=false;
+  let marketHistory=readHistory(historyKey), portfolioHistory=Array.isArray(stored.portfolioHistory)?stored.portfolioHistory:readHistory(guestHistoryKey), historyOwner=null, historyBusy=false, historyMessage="", authResolved=false, freshQuote=false;
+  function saveGuestSnapshot(){try{saveLocal();return true;}catch(e){return false;}}
   function saveHistory(key,rows){try{localStorage.setItem(key,JSON.stringify(rows));return true;}catch(e){return false;}}
   function addObservation(rows,row){return [...rows.filter(x=>x.day!==row.day),row].sort((a,b)=>a.day.localeCompare(b.day));}
   function chartHistory(id,rows,key,format){const el=$(id);if(!rows.length){el.textContent="No observations in this period yet.";return;}const vals=rows.map(x=>x[key]),lo=Math.min(...vals),hi=Math.max(...vals),span=hi-lo||1, first=Date.parse(rows[0].day),last=Date.parse(rows.at(-1).day);const pts=rows.map((x,i)=>[last===first?300:45+510*(Date.parse(x.day)-first)/(last-first),145-110*(vals[i]-lo)/span]);el.innerHTML=`<svg class="growth-svg history-chart" viewBox="0 0 600 180" role="img" aria-label="${safe(format(vals[0]))} to ${safe(format(vals.at(-1)))}"><path d="M45 20V145H555" fill="none" stroke="currentColor" opacity=".3"/><polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#77988a" stroke-width="2"/>${pts.map((p,i)=>`<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="#77988a"><title>${rows[i].day}: ${safe(format(vals[i]))}</title></circle>`).join('')}<text x="45" y="165" font-size="11" fill="currentColor">${rows[0].day}</text><text x="555" y="165" text-anchor="end" font-size="11" fill="currentColor">${rows.at(-1).day}</text></svg>`;}
   function historyStats(id,rows,key,format){const v=rows.map(x=>x[key]);$(id).textContent=v.length?`Latest ${format(v.at(-1))} · Low ${format(Math.min(...v))} · High ${format(Math.max(...v))} · Change ${v.length>1?format(v.at(-1)-v[0])+(v[0]>0?" ("+fmt((v.at(-1)-v[0])/v[0]*100,2)+"%)":""):"Not enough data"}`:"No recorded data";}
   function renderHistory(){const n=Number($("historyRange").value), cutoff=new Date(Date.now()-(n-1)*86400000).toISOString().slice(0,10), filter=a=>a.filter(x=>!n||x.day>=cutoff);const m=filter(marketHistory),p=filter(portfolioHistory);$("marketStatus").textContent="Source: Gold API live quotes observed on this device. No pre-launch historical feed. Dates use UTC.";$("snapshotStatus").textContent=historyMessage||(session?"Account snapshots synchronize when signed in.":"Guest snapshots are stored on this device.");historyStats("marketStats",m,"price",money);chartHistory("marketChart",m,"price",money);historyStats("portfolioStats",p,"value",money);chartHistory("portfolioChart",p,"value",money);chartHistory("weightChart",p,"oz",v=>fmt(v,4)+" ozt");}
-  async function recordHistory(){if(!freshQuote||!spot||!authResolved||busy||historyBusy||(session&&!cloudReady))return;const day=new Date().toISOString().slice(0,10),row={day,price:spot,oz:totalOz(),value:totalOz()*spot};if(!Number.isFinite(row.value)||row.oz<0)return;const uid=session?.user.id||null;if(!uid){portfolioHistory=addObservation(portfolioHistory,row);historyMessage=saveHistory(guestHistoryKey,portfolioHistory)?"Guest snapshots saved on this device.":"Unable to save guest history.";renderHistory();return;}if(historyOwner!==uid)return;const previous=portfolioHistory.find(x=>x.day===day);if(previous&&previous.oz===row.oz&&previous.price===row.price)return;historyBusy=true;try{const {error}=await supabase.from("silver_stack_snapshots").upsert({user_id:uid,day,price:row.price,oz:row.oz},{onConflict:"user_id,day"});if(session?.user.id!==uid)return;if(error)throw error;portfolioHistory=addObservation(portfolioHistory,row);historyMessage="Account snapshot saved.";}catch(e){if(session?.user.id===uid)historyMessage="Snapshot unavailable; check database setup or connection.";}finally{historyBusy=false;renderHistory();}}
+  async function recordHistory(){if(!freshQuote||!spot||!authResolved||busy||historyBusy||(session&&!cloudReady))return;const day=new Date().toISOString().slice(0,10),row={day,price:spot,oz:totalOz(),value:totalOz()*spot};if(!Number.isFinite(row.value)||row.oz<0)return;const uid=session?.user.id||null;if(!uid){portfolioHistory=addObservation(portfolioHistory,row);historyMessage=saveGuestSnapshot()?"Guest snapshots saved on this device.":"Unable to save guest history.";renderHistory();return;}if(historyOwner!==uid)return;const previous=portfolioHistory.find(x=>x.day===day);if(previous&&previous.oz===row.oz&&previous.price===row.price)return;historyBusy=true;try{const {error}=await supabase.from("silver_stack_snapshots").upsert({user_id:uid,day,price:row.price,oz:row.oz},{onConflict:"user_id,day"});if(session?.user.id!==uid)return;if(error)throw error;portfolioHistory=addObservation(portfolioHistory,row);historyMessage="Account snapshot saved.";}catch(e){if(session?.user.id===uid)historyMessage="Snapshot unavailable; check database setup or connection.";}finally{historyBusy=false;renderHistory();}}
   async function loadHistory(uid){historyOwner=null;portfolioHistory=[];historyMessage="Loading account history…";renderHistory();try{let rows=[],offset=0;while(true){const {data,error}=await supabase.from("silver_stack_snapshots").select("day,price,oz").eq("user_id",uid).order("day").range(offset,offset+499);if(session?.user.id!==uid)return;if(error)throw error;rows.push(...data);if(data.length<500)break;offset+=500;}portfolioHistory=rows.map(x=>({day:x.day,price:Number(x.price),oz:Number(x.oz),value:Number(x.price)*Number(x.oz)}));historyOwner=uid;historyMessage="Account history synchronized.";renderHistory();recordHistory();}catch(e){if(session?.user.id===uid){historyMessage="Account history unavailable; check database setup.";renderHistory();}}}
   $("historyRange").onchange=renderHistory;
 
